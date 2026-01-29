@@ -30,7 +30,7 @@ argparser = argparse.ArgumentParser(
 )
 
 argparser.add_argument("file")
-argparser.add_argument('--build-log', action=argparse.BooleanOptionalAction)
+argparser.add_argument('--build-log', action=argparse.BooleanOptionalAction, default=True)
 
 args = argparser.parse_args()
 

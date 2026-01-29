@@ -25,47 +25,6 @@ enum token_type {
     T_IDENTIFIER = 3,
 };
 
-char const *stringify_token(lexer *lexer, token t) {
-    switch (t.kind) {
-    case T_NONE:
-        return "NONE";
-    case T_SIMPLE:
-        return "T_SIMPLE";
-    case T_LEFT_BRACKET:
-        return "LEFT_BRACKET";
-    case T_RIGHT_BRACKET:
-        return "RIGHT_BRACKET";
-    case T_LEFT_CURLY:
-        return "LEFT_CURLY";
-    case T_RIGHT_CURLY:
-        return "RIGHT_CURLY";
-    case T_COMMA:
-        return "COMMA";
-    case T_COLON:
-        return "COLON";
-    case T_MINUS:
-        return "MINUS";
-    case T_TRUE:
-        return "TRUE";
-    case T_FALSE:
-        return "FALSE";
-    case T_STRING_LIT: {
-        __fmt("STR_LIT(%s)", t.string_lit);
-        return make_cstring(lexer, (byte_slice){formatted_string,
-                                                strlen(formatted_string)})
-            .at;
-    } break;
-    case T_IDENTIFIER: {
-        __fmt("IDENT(%s)", t.string_lit);
-        return make_cstring(lexer, (byte_slice){formatted_string,
-                                                strlen(formatted_string)})
-            .at;
-    } break;
-    case T_NUMBER_LIT:
-        panic("num literal to string");
-    }
-}
-
 struct number_lit {
     union {
         u64 integral;
@@ -83,7 +42,7 @@ typedef struct token {
         byte_slice string_lit;
         byte_slice identifier;
     };
-} token;
+} token_t;
 
 typedef struct lexer {
     u8 const *bytes;
@@ -97,7 +56,7 @@ typedef struct lexer {
     u8 *string_stack;
     size_t next_string;
     size_t stack_size;
-} lexer;
+} lexer_t;
 
 static enum token_type map_char[256] = {
     [':'] = T_COLON,         [','] = T_COMMA,      ['['] = T_LEFT_BRACKET,
@@ -105,15 +64,15 @@ static enum token_type map_char[256] = {
     ['-'] = T_MINUS};
 
 // NOTE(yousef): no bounds checking
-u8 consume(lexer *lexer) {
+u8 consume(lexer_t *lexer) {
     size_t pos = lexer->position;
     lexer->position += 1;
     return lexer->bytes[pos];
 }
 
-bool push_token(token t, u8 *buffer, size_t at, size_t max_length) {
-    if (at + sizeof(token) <= max_length) {
-        ((token *)&buffer[at])[0] = t;
+bool push_token(token_t t, u8 *buffer, size_t at, size_t max_length) {
+    if (at + sizeof(token_t) <= max_length) {
+        ((token_t *)&buffer[at])[0] = t;
         return true;
     }
     return false;
@@ -129,7 +88,7 @@ typedef struct token_error {
     struct token token;
 } token_error;
 
-byte_slice intern(lexer *lexer, byte_slice string) {
+byte_slice intern(lexer_t *lexer, byte_slice string) {
     byte_slice slice;
     if ((slice = shget(lexer->string_table, string.at)).at != NULL) {
         return slice;
@@ -138,7 +97,7 @@ byte_slice intern(lexer *lexer, byte_slice string) {
     }
 }
 
-bool match_consume_alphanumeric(lexer *lexer) {
+bool match_consume_alphanumeric(lexer_t *lexer) {
     size_t pos = lexer->position;
     u8 c = lexer->bytes[pos];
     if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
@@ -149,18 +108,82 @@ bool match_consume_alphanumeric(lexer *lexer) {
     return false;
 }
 
-byte_slice make_cstring(lexer *lexer, byte_slice source) {
+u8 temp_cstrings[MiB(1)];
+size_t next_temp_cstring = 0;
+byte_slice temp_cstring(char const *source) {
+    size_t src_len = strlen(source);
+
+    if (next_temp_cstring + src_len >
+        sizeof(temp_cstrings) / sizeof(temp_cstrings[0])) {
+        next_temp_cstring = 0;
+    }
+
+    u8 *base = &temp_cstrings[next_temp_cstring];
+
+    memcpy(base, source, src_len);
+    next_temp_cstring += src_len;
+
+    return (byte_slice){base, src_len};
+}
+
+byte_slice make_cstring(lexer_t *lexer, byte_slice source) {
     u8 *base = &lexer->string_stack[lexer->next_string];
     size_t real_length = source.len + 1;
     if (lexer->next_string + real_length <= lexer->stack_size) {
-        memset(base, source.at, source.len);
+        memcpy(base, source.at, source.len);
         base[real_length - 1] = '\0';
+        lexer->next_string += real_length;
     } else {
         panic("unable to allocate cstring");
     }
 }
 
-token_error tokenize(lexer *lexer, byte_slice tokens) {
+#define CSTR(s) temp_cstring(s)
+
+byte_slice stringify_token(lexer_t *lexer, token_t t) {
+    switch (t.kind) {
+    case T_NONE:
+        return CSTR("NONE");
+    case T_SIMPLE:
+        return CSTR("T_SIMPLE");
+    case T_LEFT_BRACKET:
+        return CSTR("LEFT_BRACKET");
+    case T_RIGHT_BRACKET:
+        return CSTR("RIGHT_BRACKET");
+    case T_LEFT_CURLY:
+        return CSTR("LEFT_CURLY");
+    case T_RIGHT_CURLY:
+        return CSTR("RIGHT_CURLY");
+    case T_COMMA:
+        return CSTR("COMMA");
+    case T_COLON:
+        return CSTR("COLON");
+    case T_MINUS:
+        return CSTR("MINUS");
+    case T_TRUE:
+        return CSTR("TRUE");
+    case T_FALSE:
+        return CSTR("FALSE");
+    case T_STRING_LIT: {
+        __fmt("STR_LIT(%s)", t.string_lit.at);
+        return make_cstring(
+            lexer, (byte_slice){formatted_string, strlen(formatted_string)});
+    } break;
+
+    case T_IDENTIFIER: {
+        __fmt("IDENT(%s)", t.string_lit.at);
+        return make_cstring(
+            lexer, (byte_slice){formatted_string, strlen(formatted_string)});
+    } break;
+
+    case T_NUMBER_LIT:
+    default:
+        panic("num literal to string");
+        break;
+    }
+}
+
+token_error tokenize(lexer_t *lexer, byte_slice tokens) {
     u8 c;
     size_t next_token = 0;
 
@@ -189,8 +212,8 @@ token_error tokenize(lexer *lexer, byte_slice tokens) {
         default:
             if (c >= '0' && c <= '9') {
                 // number
-            } else if ((type = map_char[c]) & T_SIMPLE == T_SIMPLE) {
-                if (!push_token((token){type, c}, tokens.at, next_token++,
+            } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
+                if (!push_token((token_t){type, c}, tokens.at, next_token++,
                                 tokens.len)) {
 
                     panic("ran out of space for tokens");
@@ -200,11 +223,11 @@ token_error tokenize(lexer *lexer, byte_slice tokens) {
                 }
                 size_t len = lexer->position - lexer->begin_i;
                 byte_slice string = make_cstring(
-                    lexer, (byte_slice){&lexer[lexer->begin_i], len});
+                    lexer, (byte_slice){&lexer->bytes[lexer->begin_i], len});
 
                 byte_slice interned_string = intern(lexer, string);
-                token offender = (token){.kind = T_IDENTIFIER,
-                                         .identifier = interned_string};
+                token_t offender = (token_t){.kind = T_IDENTIFIER,
+                                             .identifier = interned_string};
                 return (token_error){TE_UNKNOWN_TOKEN, offender};
             }
         }
@@ -214,7 +237,7 @@ token_error tokenize(lexer *lexer, byte_slice tokens) {
 }
 
 int main(int argc, char const *argv[]) {
-    dbg("sizeof token: %zu bytes", sizeof(token));
+    dbg("sizeof token: %zu bytes", sizeof(token_t));
 
     // NOTE(yousef): arguments to main are validated somewhere else.
     char const *filename = argv[1];
@@ -231,14 +254,14 @@ int main(int argc, char const *argv[]) {
     byte_slice slice = (byte_slice){input_buffer, input_buffer_size};
     read_file(filename, &slice);
 
-    struct token *token_buffer =
-        (struct token *)(&reserved_memory_pool[input_buffer_size]);
+    token_t *token_buffer =
+        (token_t *)(&reserved_memory_pool[input_buffer_size]);
     size_t token_buffer_size = MiB(40u);
 
     u8 *string_pool = (u8 *)(&token_buffer[token_buffer_size]);
     size_t string_pool_size = MiB(100u);
 
-    struct lexer lexer = (struct lexer){
+    lexer_t lexer = (lexer_t){
         .bytes = input_buffer,
         .len = input_buffer_size,
         .position = 0,
@@ -250,10 +273,11 @@ int main(int argc, char const *argv[]) {
         .stack_size = string_pool_size,
     };
 
-    token_error error = tokenize(
-        &lexer, (byte_slice){.at = token_buffer, .len = token_buffer_size});
+    token_error error =
+        tokenize(&lexer, (byte_slice){.at = (u8 *)token_buffer,
+                                      .len = token_buffer_size});
     if (error.kind != TE_NONE) {
-        char *to_string = stringify_token(&lexer, error.token);
+        u8 *to_string = stringify_token(&lexer, error.token).at;
         panic("error: token is %s", to_string);
     }
 }

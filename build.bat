@@ -8,5 +8,5 @@ DOSKEY ls=dir
 DOSKEY ll=dir
 
 pushd build
-cl "%~2" /Fe:agnes.exe
+clang-cl "%~2" /Fe:agnes.exe
 popd build
