@@ -23,6 +23,11 @@ typedef struct byte_slice {
 #define MAX_FORMATTED_STRING_SIZE 512
 static char formatted_string[MAX_FORMATTED_STRING_SIZE];
 
+#define __fmt(...)                                                             \
+    do {                                                                       \
+        sprintf(formatted_string, __VA_ARGS__);                                \
+    } while (0)
+
 // NOTE(yousef): no bounds checking. This is intentional.
 #define panic(...)                                                             \
     do {                                                                       \
