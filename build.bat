@@ -1,17 +1,12 @@
 @echo off
+call "%~1" x64
 
-if not defined VISUAL_DSA (
-	call prepare.bat > nul
-)
+set VISUAL_DSA=1
+DOSKEY clear=cls
 
-if "%~1"=="" (
-	set filename=main
-) else (
-	set filename=%~1
-)
-
-if not exist build mkdir build
+DOSKEY ls=dir
+DOSKEY ll=dir
 
 pushd build
-clang-cl ..\%filename%.c
+cl "%~2" /Fe:agnes.exe
 popd build

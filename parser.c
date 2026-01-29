@@ -116,7 +116,7 @@ bool read_file(char const *pathname, byte_slice *buffer) {
         CreateFileA(pathname, GENERIC_READ, FILE_SHARE_READ, NULL,
                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file_handle == INVALID_HANDLE_VALUE) {
-        panic("unable to open %s for reading. Last Error: %lu", pathname,
+        panic("unable to open \"%s\" for reading. Last Error: %lu", pathname,
               GetLastError());
     }
     DWORD _file_size_hi = 0;
@@ -131,7 +131,7 @@ bool read_file(char const *pathname, byte_slice *buffer) {
         ReadFile(file_handle, (void *)buffer->at, file_size, &bytes_read, NULL);
 
     if (file_size == bytes_read) {
-        dbg("read: %lu bytes.\n", file_size);
+        dbg("read: %lu bytes", file_size);
     } else {
         DWORD last_error = GetLastError();
         panic("unable to read file. file_size: %lu, bytes_read: "
@@ -147,16 +147,23 @@ bool read_file(char const *pathname, byte_slice *buffer) {
 
 void tokenize(byte_slice input, struct token *buf, size_t buf_len) {}
 
-int main() {
-    todo("testing");
-    size_t pool_size = MiB(200u);
+int main(int argc, char const *argv[]) {
+    // NOTE(yousef): arguments to main are validated somewhere else.
+    char const *filename = argv[1];
+    size_t file_size = (size_t)atoi(argv[2]); // in bytes
+
+    size_t pool_size = file_size + MiB(200u);
     u8 *reserved_memory_pool;
     if (!alloc_commit(pool_size, &reserved_memory_pool)) {
         panic("unable to allocate required memory at start up");
     }
+
     u8 *input_buffer = reserved_memory_pool;
-    size_t input_buffer_size = MiB(50u);
+    size_t input_buffer_size = file_size;
     struct token *token_buffer =
         (struct token *)&reserved_memory_pool[input_buffer_size];
     size_t token_buffer_size = MiB(40u);
+
+    byte_slice slice = (byte_slice){input_buffer, input_buffer_size};
+    read_file(filename, &slice);
 }
