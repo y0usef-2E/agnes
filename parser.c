@@ -1,153 +1,147 @@
-// TODO(yousef): check for correctness. Is this what you want?
-#if defined(_WIN32)
-#include <Windows.h>
-#endif
-
+#include "common.h"
+#include "platform.c"
 #include <assert.h>
-#include <stdbool.h>
-#include <stdint.h>
-#include <stdio.h>
 
-#define KiB(n) (n * 1024u)
-#define MiB(n) (KiB(n) * 1024u)
-#define GiB(n) (MiB(n) * 1024u)
-
-#define DEBUG_LOG 1
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
 
 enum token_type {
-    T_LEFT_BRACKET,
-    T_RIGHT_BRACKET,
-    T_LEFT_CURLY,
-    T_RIGHT_CURLY,
+    T_NONE = 0u,
 
-    T_COMMA,
-    T_COLON,
-    T_TRUE,
-    T_FALSE,
-    T_HYPHEN,
+    T_SIMPLE = 0x8000u,
+
+    T_LEFT_BRACKET = T_SIMPLE | 0x1u,
+    T_RIGHT_BRACKET = T_SIMPLE | 0x2u,
+    T_LEFT_CURLY = T_SIMPLE | 0x4u,
+    T_RIGHT_CURLY = T_SIMPLE | 0x8u,
+    T_COMMA = T_SIMPLE | 0x10u,
+    T_COLON = T_SIMPLE | 0x20u,
+    T_MINUS = T_SIMPLE | 0x40u,
+    T_TRUE = T_SIMPLE | 0x80u,
+    T_FALSE = T_SIMPLE | 0x100u,
 
     T_NUMBER_LIT,
     T_STRING_LIT,
 };
 
-typedef struct byte_slice {
-    u8 const *at;
-    size_t len;
-} byte_slice;
-
 struct number_lit {
     union {
-        uint64_t integral;
+        u64 integral;
         double floating;
     };
 };
 
-struct token {
+struct interned_string;
+
+typedef struct token {
     enum token_type kind;
     union {
         struct {
             char simple_token;
         };
         struct number_lit num;
-        struct byte_slice string_lit;
+        struct interned_string;
     };
-};
+} token;
 
-struct tokenizer {
-    byte_slice bytes;
+typedef struct lexer {
+    u8 const *bytes;
+    size_t len;
     size_t position;
     size_t begin_i;
-};
+    struct {
+        char *key;
+        byte_slice *value;
+    } *string_pool;
+} lexer;
 
-#define MAX_FORMATTED_STRING_SIZE 512
-static char formatted_string[MAX_FORMATTED_STRING_SIZE];
+static enum token_type map_char[256] = {
+    [':'] = T_COLON,         [','] = T_COMMA,      ['['] = T_LEFT_BRACKET,
+    [']'] = T_RIGHT_BRACKET, ['{'] = T_LEFT_CURLY, ['}'] = T_RIGHT_CURLY,
+    ['-'] = T_MINUS};
 
-// NOTE(yousef): no bounds checking. This is intentional.
-#define panic(...)                                                             \
-    do {                                                                       \
-        sprintf(formatted_string, __VA_ARGS__);                                \
-        printf("[PANIC] %s (Line=%d).\n", formatted_string, __LINE__);         \
-        exit(1);                                                               \
-    } while (0)
-
-#define todo(...)                                                              \
-    do {                                                                       \
-        char const preamble[17] = "[UNIMPLEMENTED] ";                          \
-        sprintf(formatted_string, preamble);                                   \
-        sprintf(formatted_string + 16, __VA_ARGS__);                           \
-        panic(formatted_string);                                               \
-    } while (0)
-
-#define __dbg_at_line(...)                                                     \
-    do {                                                                       \
-        sprintf(formatted_string, __VA_ARGS__);                                \
-        printf("[DEBUG] %s (line=%d).\n", formatted_string, __LINE__);         \
-    } while (0)
-
-#define __nop(...)                                                             \
-    do {                                                                       \
-    } while (0)
-
-#if DEBUG_LOG
-#define dbg(...) __dbg_at_line(__VA_ARGS__)
-#else
-#define dbg(...) __nop(__VA_ARGS__)
-#endif
-
-bool alloc_commit(size_t requested_size, u8 **out) {
-#if defined(_WIN32)
-    *out = (u8 *)VirtualAlloc(NULL, requested_size, MEM_COMMIT | MEM_RESERVE,
-                              PAGE_READWRITE);
-    return *out != NULL;
-#else
-    todo("memory allocation on non-win32 platforms");
-#endif
+// NOTE(yousef): no bounds checking
+u8 consume(lexer *lexer) {
+    size_t pos = lexer->position;
+    lexer->position += 1;
+    return lexer->bytes[pos];
 }
 
-// NOTE(yousef): assumes pathname is valid
-bool read_file(char const *pathname, byte_slice *buffer) {
-#if defined(_WIN32)
-    HANDLE file_handle =
-        CreateFileA(pathname, GENERIC_READ, FILE_SHARE_READ, NULL,
-                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (file_handle == INVALID_HANDLE_VALUE) {
-        panic("unable to open \"%s\" for reading. Last Error: %lu", pathname,
-              GetLastError());
+bool push_token(token t, u8 *buffer, size_t at, size_t max_length) {
+    if (at + sizeof(token) <= max_length) {
+        ((token *)&buffer[at])[0] = t;
+        return true;
     }
-    DWORD _file_size_hi = 0;
-    DWORD _file_size_lo = GetFileSize(file_handle, &_file_size_hi);
-    DWORD file_size = _file_size_lo;
-    if (_file_size_hi != 0 || file_size > buffer->len) {
-        panic("file too big");
-    }
+    return false;
+}
 
-    DWORD bytes_read = 0;
-    bool result =
-        ReadFile(file_handle, (void *)buffer->at, file_size, &bytes_read, NULL);
+typedef enum te_kind {
+    TE_NONE = 0,
+    TE_UNKNOWN_CHAR,
+} te_kind;
 
-    if (file_size == bytes_read) {
-        dbg("read: %lu bytes", file_size);
+typedef struct token_error {
+    enum te_kind kind;
+    u8 byte;
+} token_error;
+
+byte_slice *intern(lexer lexer, byte_slice *string) {
+    u8 *address;
+    if ((address = shget(lexer.string_pool, string)) != NULL) {
+        return address;
     } else {
-        DWORD last_error = GetLastError();
-        panic("unable to read file. file_size: %lu, bytes_read: "
-              "%lu, last_error: %lu",
-              file_size, bytes_read, last_error);
+        shput(lexer.string_pool, string, string);
     }
-
-    buffer->len = file_size;
-#else
-
-#endif
 }
 
-void tokenize(byte_slice input, struct token *buf, size_t buf_len) {}
+bool match_consume_alphanumeric(lexer lexer) {}
+
+token_error tokenize(lexer lexer, byte_slice tokens) {
+    u8 c;
+    size_t next_token = 0;
+
+    while (lexer.position < lexer.len) {
+        c = consume(&lexer);
+        lexer.begin_i = lexer.position - 1;
+
+        enum token_type type;
+
+        switch (c) {
+        case ' ':
+        case '\n':
+        case '\r':
+        case '\t':
+            // ignore whitespace
+            break;
+
+        case 't':
+
+            break;
+        case 'f':
+            break;
+        case '"':
+            break;
+
+        default:
+            if (c >= '0' && c <= '9') {
+            } else if ((type = map_char[c]) & T_SIMPLE == T_SIMPLE) {
+                if (!push_token((token){type, c}, tokens.at, next_token++,
+                                tokens.len)) {
+
+                    panic("ran out of space for tokens");
+                }
+            } else {
+                return (token_error){.kind = TE_UNKNOWN_CHAR, .byte = c};
+            }
+        }
+    }
+
+    return (token_error){.kind = TE_NONE};
+}
 
 int main(int argc, char const *argv[]) {
+    dbg("sizeof token: %zu bytes", sizeof(token));
+
     // NOTE(yousef): arguments to main are validated somewhere else.
     char const *filename = argv[1];
     size_t file_size = (size_t)atoi(argv[2]); // in bytes
