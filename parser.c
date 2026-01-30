@@ -5,7 +5,7 @@
 #define STB_DS_IMPLEMENTATION
 #include "stb_ds.h"
 
-enum token_type {
+typedef enum token_type {
     T_NONE = 0u,
     T_EOF = T_NONE,
 
@@ -24,14 +24,15 @@ enum token_type {
     T_NUMBER_LIT = 1,
     T_STRING_LIT = 2,
     T_UNKNOWN = 3,
-};
+    T_UNTERMINATED_STRING_LIT,
+} token_type_t;
 
-struct number_lit {
+typedef struct number_lit {
     union {
         u64 integral;
         double floating;
     };
-};
+} number_lit_t;
 
 typedef struct token {
     enum token_type kind;
@@ -40,8 +41,7 @@ typedef struct token {
             char simple_token;
         };
         struct number_lit num;
-        byte_slice string_lit;
-        byte_slice identifier;
+        byte_slice byte_sequence; // used for unidentified tokens
     };
 } token_t;
 
@@ -70,9 +70,11 @@ static enum token_type map_char[256] = {
     [']'] = T_RIGHT_BRACKET, ['{'] = T_LEFT_CURLY, ['}'] = T_RIGHT_CURLY,
     ['-'] = T_MINUS};
 
-// NOTE(yousef): no bounds checking
 u8 consume(lexer_t *lexer) {
     size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return '\0';
+    }
     lexer->position += 1;
     return lexer->bytes[pos];
 }
@@ -84,16 +86,6 @@ bool push_token(token_t t, u8 *buffer, size_t at, size_t max_length) {
     }
     return false;
 }
-
-typedef enum te_kind {
-    TE_NONE = 0,
-    TE_UNKNOWN_TOKEN,
-} te_kind;
-
-typedef struct token_error {
-    enum te_kind kind;
-    struct token token;
-} token_error;
 
 #define STR(src) (intern_cstring(src))
 
@@ -131,10 +123,22 @@ byte_slice intern_string(byte_slice source) {
 
 bool equals(byte_slice left, byte_slice right) { return left.at == right.at; }
 
-#define MATCH_CONSUME_ALPHANUMERIC(lexer)                                      \
-    (match_consume_ident_char(lexer, false))
+#define MATCH_CONSUME_ALPHANUMERIC(lexer) match_consume_ident_char(lexer, false)
 
-#define MATCH_CONSUME_IDENT_CHAR(lexer) (match_consume_ident_char(lexer, true))
+#define MATCH_CONSUME_IDENT_CHAR(lexer) match_consume_ident_char(lexer, true)
+
+bool match_consume_any_strchar(lexer_t *lexer) {
+    size_t pos;
+    if ((pos = lexer->position) >= lexer->len) {
+        return false;
+    }
+    u8 c = lexer->bytes[pos];
+    if (c == '\\' || c == '"') {
+        return false;
+    }
+    lexer->position += 1;
+    return true;
+}
 
 bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
     size_t pos = lexer->position;
@@ -179,14 +183,21 @@ char const *stringify_token(lexer_t *lexer, token_t t) {
         return "FALSE";
 
     case T_STRING_LIT: {
-        __fmt("STR_LIT(%s)", t.string_lit.at);
+        __fmt("STR_LIT(%s)", t.byte_sequence.at);
         return intern_string(
                    (byte_slice){formatted_string, strlen(formatted_string)})
             .at;
     } break;
 
     case T_UNKNOWN: {
-        __fmt("UNKNOWN(%s)", t.string_lit.at);
+        __fmt("UNKNOWN(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_UNTERMINATED_STRING_LIT: {
+        __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
         return intern_string(
                    (byte_slice){formatted_string, strlen(formatted_string)})
             .at;
@@ -194,7 +205,7 @@ char const *stringify_token(lexer_t *lexer, token_t t) {
 
     case T_NUMBER_LIT:
     default:
-        panic("num literal to string");
+        todo("stringify token=%d", t.kind);
         break;
     }
 }
@@ -217,7 +228,7 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
 
         case 't':
         case 'f': {
-            enum token_type type;
+            token_type_t type;
 
             bool consumed_t = c == 't';
             byte_slice expect = consumed_t ? STR("true") : STR("false");
@@ -235,14 +246,37 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
                     panic("ran out of space for tokens");
                 }
             } else {
-                return (token_t){.kind = T_UNKNOWN, .identifier = string};
+                return (token_t){.kind = T_UNKNOWN, .byte_sequence = string};
             }
         } break;
-        case '"':
-            break;
+
+        case '"': {
+            while (match_consume_any_strchar(lexer)) {
+            };
+            u8 last = consume(lexer);
+
+            size_t start = lexer->begin_i + 1;
+            size_t len = lexer->position - start;
+            byte_slice slice = INTERN(SLICE(lexer->bytes + start, len));
+
+            switch (last) {
+            case '"':
+                token_t t = (token_t){T_STRING_LIT, .byte_sequence = slice};
+                push_token(t, tokens.at, next_token++, tokens.len);
+                break;
+            case '\\':
+                todo("escape sequences, et cetera.");
+                break;
+            case '\0':
+                return (token_t){T_UNTERMINATED_STRING_LIT,
+                                 .byte_sequence = slice};
+            default:
+                panic("unreachable code path");
+            }
+        } break;
 
         default: {
-            enum token_type type;
+            token_type_t type;
             if (c >= '0' && c <= '9') {
                 // number
             } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
@@ -255,10 +289,10 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
                 while (MATCH_CONSUME_IDENT_CHAR(lexer)) {
                 }
                 size_t len = lexer->position - lexer->begin_i;
-                byte_slice string =
+                byte_slice slice =
                     INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
-                return (token_t){.kind = T_UNKNOWN, .identifier = string};
+                return (token_t){.kind = T_UNKNOWN, .byte_sequence = slice};
             }
         } break;
         }
