@@ -18,13 +18,15 @@ typedef enum token_type {
     T_COMMA = T_SIMPLE | 0x10u,
     T_COLON = T_SIMPLE | 0x20u,
     T_MINUS = T_SIMPLE | 0x40u,
+
     T_TRUE = T_SIMPLE | 0x80u,
     T_FALSE = T_SIMPLE | 0x100u,
+    T_NULL = T_SIMPLE | 0x200u,
 
     T_NUMBER_LIT = 1,
     T_STRING_LIT = 2,
     T_UNKNOWN = 3,
-    T_UNTERMINATED_STRING_LIT,
+    T_UNTERMINATED_STRING_LIT = 4,
 } token_type_t;
 
 typedef struct number_lit {
@@ -61,6 +63,12 @@ typedef struct string_interner {
     size_t next_string;
     size_t stack_size;
 } interner_t;
+
+typedef struct parser {
+    token_t *tokens;
+    size_t len;
+    size_t position;
+} parser_t;
 
 static interner_t interner = {0};
 #define STRING_TABLE interner.string_table
@@ -112,7 +120,7 @@ byte_slice intern_string(byte_slice source) {
     } else {
         panic("unable to allocate cstring");
     }
-    byte_slice allocated = (byte_slice){base, real_length};
+    byte_slice allocated = {base, real_length};
     byte_slice slice;
     if ((slice = shget(STRING_TABLE, allocated.at)).at != NULL) {
         return slice;
@@ -210,7 +218,7 @@ char const *stringify_token(lexer_t *lexer, token_t t) {
     }
 }
 
-token_t tokenize(lexer_t *lexer, byte_slice tokens) {
+token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
     u8 c;
     size_t next_token = 0;
 
@@ -227,11 +235,15 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
             break;
 
         case 't':
-        case 'f': {
-            token_type_t type;
+        case 'f':
+        case 'n': {
+            token_type_t expected_type =
+                c == 't' ? T_TRUE : (c == 'f' ? T_FALSE : T_NULL);
 
-            bool consumed_t = c == 't';
-            byte_slice expect = consumed_t ? STR("true") : STR("false");
+            byte_slice expect =
+                expected_type == T_TRUE
+                    ? STR("true")
+                    : (expected_type == T_FALSE ? STR("false") : STR("null"));
 
             while (MATCH_CONSUME_IDENT_CHAR(lexer)) {
             }
@@ -240,8 +252,9 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
                 INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
             if (equals(string, expect)) {
-                if (!push_token((token_t){type, c}, tokens.at, next_token++,
-                                tokens.len)) {
+                if (!push_token(
+                        (token_t){expected_type, .byte_sequence = expect},
+                        tokens.at, next_token++, tokens.len)) {
 
                     panic("ran out of space for tokens");
                 }
@@ -298,7 +311,67 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens) {
         }
     }
 
-    return (token_t){.kind = T_NONE};
+    push_token((token_t){.kind = T_EOF}, tokens.at, next_token++, tokens.len);
+    *token_count = next_token;
+
+    return *(token_t *)&tokens.at[next_token - 1];
+}
+
+token_t peek_token(parser_t *parser) {
+    assert(parser->tokens[parser->len - 1].kind == T_EOF);
+
+    size_t pos = parser->position;
+    if (pos >= parser->len) {
+        return parser->tokens[parser->len - 1];
+    }
+    return parser->tokens[pos];
+}
+
+void advance(parser_t *parser) { parser->position++; }
+
+typedef enum value_type {
+    J_NONE = 0,
+    J_OBJECT,
+    J_ARRAY,
+    J_STRING,
+    J_NUMBER,
+    J_TRUE,
+    J_FALSE,
+    J_NULL,
+} value_type_t;
+
+typedef struct json_result {
+    bool is_error;
+    token_t offender;
+    // TODO(yousef): later byte and line position in original file
+} json_result_t;
+
+json_result_t parse(parser_t *parser) {
+    assert(parser->tokens[parser->len - 1].kind == T_EOF);
+    token_t token = peek_token(parser);
+
+    switch (token.kind) {
+    // obj
+    case T_LEFT_CURLY:
+    // array
+    case T_LEFT_BRACKET:
+    // string
+    case T_STRING_LIT:
+
+    // numbers
+    case T_MINUS:
+    case T_NUMBER_LIT:
+
+    case T_TRUE:
+    case T_FALSE:
+    case T_NULL:
+        todo("incomplete parser");
+        break;
+
+    default:
+        // unexpected token
+        return (json_result_t){true, token};
+    }
 }
 
 int main(int argc, char const *argv[]) {
@@ -328,20 +401,30 @@ int main(int argc, char const *argv[]) {
     interner.stack_size = string_pool_size;
     interner.next_string = 0;
 
-    byte_slice slice = (byte_slice){input_buffer, input_buffer_size};
+    byte_slice slice = {input_buffer, input_buffer_size};
     read_file(filename, &slice);
 
-    lexer_t lexer = (lexer_t){
+    lexer_t lexer = {
         .bytes = input_buffer,
         .len = input_buffer_size,
         .position = 0,
         .begin_i = 0,
 
     };
-    token_t last = tokenize(&lexer, (byte_slice){.at = (u8 *)token_buffer,
-                                                 .len = token_buffer_size});
+
+    size_t token_count;
+    token_t last = tokenize(
+        &lexer,
+        (byte_slice){.at = (u8 *)token_buffer, .len = token_buffer_size},
+        &token_count);
+
     if (last.kind != T_EOF) {
         u8 *to_string = stringify_token(&lexer, last);
         panic("token %s", to_string);
     }
+
+    parser_t parser = {
+        .tokens = token_buffer, .len = token_count, .position = 0};
+
+    parse(&parser);
 }
