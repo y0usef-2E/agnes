@@ -121,6 +121,8 @@ bool push_token(token_t t, u8 *buffer, size_t *next_token, size_t max_length) {
 
 byte_slice intern_string(byte_slice source) {
     u8 *base = interner.string_stack + interner.next_string;
+    size_t temp_next_string = interner.next_string;
+
     size_t real_length = source.len + 1;
     if (interner.next_string + real_length <= interner.stack_size) {
         memcpy(base, source.at, source.len);
@@ -131,7 +133,10 @@ byte_slice intern_string(byte_slice source) {
     }
     byte_slice allocated = {base, real_length};
     byte_slice slice;
+
     if ((slice = shget(STRING_TABLE, allocated.at)).at != NULL) {
+        // string already stored: discard temp allocation
+        interner.next_string = temp_next_string;
         return slice;
     } else {
         return shput(STRING_TABLE, allocated.at, allocated);
