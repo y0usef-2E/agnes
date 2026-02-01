@@ -14,7 +14,7 @@ bool alloc_commit(size_t requested_size, u8 **out) {
 }
 
 // NOTE(yousef): assumes pathname is valid
-bool read_file(char const *pathname, byte_slice *buffer) {
+size_t read_file(char const *pathname, byte_slice *buffer) {
 #if defined(_WIN32)
     HANDLE file_handle =
         CreateFileA(pathname, GENERIC_READ, FILE_SHARE_READ, NULL,

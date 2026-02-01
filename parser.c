@@ -7,8 +7,6 @@
 
 typedef enum token_type {
     T_NONE = 0u,
-    T_EOF = T_NONE,
-
     T_SIMPLE = 0x8000u,
 
     T_LEFT_BRACKET = T_SIMPLE | 0x1u,
@@ -27,6 +25,7 @@ typedef enum token_type {
     T_STRING_LIT = 2,
     T_UNKNOWN = 3,
     T_UNTERMINATED_STRING_LIT = 4,
+    T_EOF = 0xFFFFFFFF,
 } token_type_t;
 
 typedef struct number_lit {
@@ -70,6 +69,22 @@ typedef struct parser {
     size_t position;
 } parser_t;
 
+typedef enum value_type {
+    J_NONE = 0,
+    J_OBJECT,
+    J_ARRAY,
+    J_STRING,
+    J_NUMBER,
+    J_TRUE,
+    J_FALSE,
+    J_NULL,
+} jvalue_type_t;
+
+typedef struct json_result {
+    token_t offender;
+    // TODO(yousef): later byte and line position in original file
+} json_result_t;
+
 static interner_t interner = {0};
 #define STRING_TABLE interner.string_table
 
@@ -87,25 +102,19 @@ u8 consume(lexer_t *lexer) {
     return lexer->bytes[pos];
 }
 
-bool push_token(token_t t, u8 *buffer, size_t at, size_t max_length) {
-    if (at + sizeof(token_t) <= max_length) {
-        ((token_t *)&buffer[at])[0] = t;
+bool push_token(token_t t, u8 *buffer, size_t *next_token, size_t max_length) {
+    size_t at = (*next_token);
+    if (at + 1 <= max_length) {
+        token_t *as = (token_t *)buffer;
+        as[at] = t;
+        *next_token += 1;
         return true;
     }
     return false;
 }
 
-#define STR(src) (intern_cstring(src))
-
-byte_slice intern_cstring(char const *string) {
-    byte_slice slice;
-    if ((slice = shget(STRING_TABLE, string)).at != NULL) {
-        return slice;
-    } else {
-        slice = (byte_slice){string, strlen(string)};
-        return shput(STRING_TABLE, string, slice);
-    }
-}
+#define STR(src) intern_cstring(src)
+#define CSTR(src) (intern_cstring(src).at)
 
 #define SLICE(src, len) ((byte_slice){src, len})
 #define INTERN(slice) intern_string(slice)
@@ -127,6 +136,11 @@ byte_slice intern_string(byte_slice source) {
     } else {
         return shput(STRING_TABLE, allocated.at, allocated);
     }
+}
+
+byte_slice intern_cstring(char const *string) {
+    byte_slice slice = (byte_slice){string, strlen(string)};
+    return intern_string(slice);
 }
 
 bool equals(byte_slice left, byte_slice right) { return left.at == right.at; }
@@ -165,30 +179,58 @@ bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
     return false;
 }
 
-char const *stringify_token(lexer_t *lexer, token_t t) {
+char const *format_jvalue(jvalue_type_t kind) {
+    switch (kind) {
+    case J_TRUE:
+        return CSTR("TRUE");
+    case J_FALSE:
+        return CSTR("FALSE");
+    case J_NULL:
+        return CSTR("NULL");
+
+    case J_ARRAY:
+        todo("array formatting");
+        break;
+
+    case J_OBJECT:
+        return CSTR("OBJ");
+
+    case J_STRING:
+        return CSTR("STRING");
+
+    case J_NUMBER:
+        todo("number formatting");
+    }
+}
+
+char const *format_token(token_t t) {
     switch (t.kind) {
+    case T_EOF:
+        return CSTR("EOF");
     case T_NONE:
-        return "NONE";
+        return CSTR("T_NONE");
     case T_SIMPLE:
-        return "T_SIMPLE";
+        return CSTR("T_SIMPLE");
     case T_LEFT_BRACKET:
-        return "LEFT_BRACKET";
+        return CSTR("LEFT_BRACKET");
     case T_RIGHT_BRACKET:
-        return "RIGHT_BRACKET";
+        return CSTR("RIGHT_BRACKET");
     case T_LEFT_CURLY:
-        return "LEFT_CURLY";
+        return CSTR("LEFT_CURLY");
     case T_RIGHT_CURLY:
-        return "RIGHT_CURLY";
+        return CSTR("RIGHT_CURLY");
     case T_COMMA:
-        return "COMMA";
+        return CSTR("COMMA");
     case T_COLON:
-        return "COLON";
+        return CSTR("COLON");
     case T_MINUS:
-        return "MINUS";
+        return CSTR("MINUS");
     case T_TRUE:
-        return "TRUE";
+        return CSTR("TRUE");
     case T_FALSE:
-        return "FALSE";
+        return CSTR("FALSE");
+    case T_NULL:
+        return CSTR("NULL");
 
     case T_STRING_LIT: {
         __fmt("STR_LIT(%s)", t.byte_sequence.at);
@@ -212,13 +254,11 @@ char const *stringify_token(lexer_t *lexer, token_t t) {
     } break;
 
     case T_NUMBER_LIT:
-    default:
-        todo("stringify token=%d", t.kind);
-        break;
+        return "NUMBER";
     }
 }
 
-token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
+void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
     u8 c;
     size_t next_token = 0;
 
@@ -227,6 +267,9 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
         lexer->begin_i = lexer->position - 1;
 
         switch (c) {
+        case '\0':
+            assert(lexer->position == lexer->len - 1);
+            break;
         case ' ':
         case '\n':
         case '\r':
@@ -254,12 +297,13 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
             if (equals(string, expect)) {
                 if (!push_token(
                         (token_t){expected_type, .byte_sequence = expect},
-                        tokens.at, next_token++, tokens.len)) {
+                        tokens.at, &next_token, tokens.len)) {
 
                     panic("ran out of space for tokens");
                 }
             } else {
-                return (token_t){.kind = T_UNKNOWN, .byte_sequence = string};
+                // TODO(yousef): push offending token?
+                return;
             }
         } break;
 
@@ -269,20 +313,19 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
             u8 last = consume(lexer);
 
             size_t start = lexer->begin_i + 1;
-            size_t len = lexer->position - start;
+            size_t len = lexer->position - start - 1;
             byte_slice slice = INTERN(SLICE(lexer->bytes + start, len));
 
             switch (last) {
             case '"':
                 token_t t = (token_t){T_STRING_LIT, .byte_sequence = slice};
-                push_token(t, tokens.at, next_token++, tokens.len);
+                push_token(t, tokens.at, &next_token, tokens.len);
                 break;
             case '\\':
                 todo("escape sequences, et cetera.");
                 break;
             case '\0':
-                return (token_t){T_UNTERMINATED_STRING_LIT,
-                                 .byte_sequence = slice};
+                return;
             default:
                 panic("unreachable code path");
             }
@@ -293,9 +336,8 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
             if (c >= '0' && c <= '9') {
                 // number
             } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
-                if (!push_token((token_t){type, c}, tokens.at, next_token++,
-                                tokens.len)) {
-
+                token_t t = (token_t){type, c};
+                if (!push_token(t, tokens.at, &next_token, tokens.len)) {
                     panic("ran out of space for tokens");
                 }
             } else {
@@ -305,16 +347,14 @@ token_t tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
                 byte_slice slice =
                     INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
-                return (token_t){.kind = T_UNKNOWN, .byte_sequence = slice};
+                return;
             }
         } break;
         }
     }
 
-    push_token((token_t){.kind = T_EOF}, tokens.at, next_token++, tokens.len);
+    push_token((token_t){.kind = T_EOF}, tokens.at, &next_token, tokens.len);
     *token_count = next_token;
-
-    return *(token_t *)&tokens.at[next_token - 1];
 }
 
 token_t peek_token(parser_t *parser) {
@@ -327,52 +367,87 @@ token_t peek_token(parser_t *parser) {
     return parser->tokens[pos];
 }
 
+bool consume_token(parser_t *parser, token_type_t expect) {
+    assert(parser->tokens[parser->len - 1].kind == T_EOF);
+
+    size_t pos = parser->position;
+    if (pos >= parser->len) {
+        return false;
+    }
+    if (parser->tokens[pos].kind == expect) {
+        parser->position += 1;
+        return true;
+    }
+    return false;
+}
+
 void advance(parser_t *parser) { parser->position++; }
 
-typedef enum value_type {
-    J_NONE = 0,
-    J_OBJECT,
-    J_ARRAY,
-    J_STRING,
-    J_NUMBER,
-    J_TRUE,
-    J_FALSE,
-    J_NULL,
-} value_type_t;
-
-typedef struct json_result {
-    bool is_error;
-    token_t offender;
-    // TODO(yousef): later byte and line position in original file
-} json_result_t;
-
-json_result_t parse(parser_t *parser) {
+jvalue_type_t parse_value(parser_t *parser) {
     assert(parser->tokens[parser->len - 1].kind == T_EOF);
     token_t token = peek_token(parser);
+    dbg("token: %s", format_token(token));
 
     switch (token.kind) {
     // obj
-    case T_LEFT_CURLY:
+    case T_LEFT_CURLY: {
+        advance(parser);
+        while (consume_token(parser, T_STRING_LIT)) {
+            if (!consume_token(parser, T_COLON)) {
+                return J_NONE; // for now just exit function completely,
+                               // later do better error handling
+            }
+            jvalue_type_t val = parse_value(parser);
+            if (val == J_NONE) {
+                return J_NONE;
+            }
+            if (!consume_token(parser, T_COMMA)) {
+                break;
+            }
+        }
+        if (!consume_token(parser, T_RIGHT_CURLY)) {
+            return J_NONE;
+        }
+
+        return J_OBJECT;
+    } break;
+
     // array
     case T_LEFT_BRACKET:
+        advance(parser);
+        todo("arrays");
+
     // string
     case T_STRING_LIT:
+        advance(parser);
+        return J_STRING;
 
     // numbers
     case T_MINUS:
     case T_NUMBER_LIT:
+        advance(parser);
+        todo("parsing numbers");
 
     case T_TRUE:
+        dbg("here");
+        advance(parser);
+        return J_TRUE;
+
     case T_FALSE:
+        advance(parser);
+        return J_FALSE;
+
     case T_NULL:
         todo("incomplete parser");
         break;
 
     default:
         // unexpected token
-        return (json_result_t){true, token};
+        return J_NONE;
     }
 }
+
+jvalue_type_t parse(parser_t *parser) { return parse_value(parser); }
 
 int main(int argc, char const *argv[]) {
     dbg("sizeof token: %zu bytes", sizeof(token_t));
@@ -401,30 +476,35 @@ int main(int argc, char const *argv[]) {
     interner.stack_size = string_pool_size;
     interner.next_string = 0;
 
-    byte_slice slice = {input_buffer, input_buffer_size};
-    read_file(filename, &slice);
+    byte_slice file_data = {input_buffer, input_buffer_size};
+    read_file(filename, &file_data);
 
     lexer_t lexer = {
-        .bytes = input_buffer,
-        .len = input_buffer_size,
+        .bytes = file_data.at,
+        .len = file_data.len,
         .position = 0,
         .begin_i = 0,
 
     };
 
     size_t token_count;
-    token_t last = tokenize(
-        &lexer,
-        (byte_slice){.at = (u8 *)token_buffer, .len = token_buffer_size},
-        &token_count);
-
+    tokenize(&lexer,
+             (byte_slice){.at = (u8 *)token_buffer, .len = token_buffer_size},
+             &token_count);
+    token_t last = ((token_t *)token_buffer)[token_count - 1];
     if (last.kind != T_EOF) {
-        u8 *to_string = stringify_token(&lexer, last);
+        u8 *to_string = format_token(last);
         panic("token %s", to_string);
     }
 
+    for (int i = 0; i < token_count; ++i) {
+        token_t e = ((token_t *)token_buffer)[i];
+        char *formatted = format_token(e);
+        dbg("tokens[%d]: %s", i, formatted);
+    }
     parser_t parser = {
         .tokens = token_buffer, .len = token_count, .position = 0};
 
-    parse(&parser);
+    jvalue_type_t val = parse(&parser);
+    dbg(format_jvalue(val));
 }
