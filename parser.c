@@ -51,6 +51,10 @@ typedef struct lexer {
     size_t len;
     size_t position;
     size_t begin_i;
+
+    token_t *tokens;
+    size_t max_tokens;
+    size_t next_token;
 } lexer_t;
 
 typedef struct string_interner {
@@ -102,12 +106,11 @@ u8 consume(lexer_t *lexer) {
     return lexer->bytes[pos];
 }
 
-bool push_token(token_t t, u8 *buffer, size_t *next_token, size_t max_length) {
-    size_t at = (*next_token);
-    if (at + 1 <= max_length) {
-        token_t *as = (token_t *)buffer;
-        as[at] = t;
-        *next_token += 1;
+bool push_token(lexer_t *lexer, token_t t) {
+    size_t at = lexer->next_token;
+    if (at + 1 <= lexer->max_tokens) {
+        lexer->tokens[at] = t;
+        lexer->next_token += 1;
         return true;
     }
     return false;
@@ -263,7 +266,7 @@ char const *format_token(token_t t) {
     }
 }
 
-void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
+void tokenize(lexer_t *lexer) {
     u8 c;
     size_t next_token = 0;
 
@@ -300,9 +303,8 @@ void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
                 INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
             if (equals(string, expect)) {
-                if (!push_token(
-                        (token_t){expected_type, .byte_sequence = expect},
-                        tokens.at, &next_token, tokens.len)) {
+                if (!push_token(lexer, (token_t){expected_type,
+                                                 .byte_sequence = expect})) {
 
                     panic("ran out of space for tokens");
                 }
@@ -324,7 +326,7 @@ void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
             switch (last) {
             case '"':
                 token_t t = (token_t){T_STRING_LIT, .byte_sequence = slice};
-                push_token(t, tokens.at, &next_token, tokens.len);
+                push_token(lexer, t);
                 break;
             case '\\':
                 todo("escape sequences, et cetera.");
@@ -342,7 +344,7 @@ void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
                 // number
             } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
                 token_t t = (token_t){type, c};
-                if (!push_token(t, tokens.at, &next_token, tokens.len)) {
+                if (!push_token(lexer, t)) {
                     panic("ran out of space for tokens");
                 }
             } else {
@@ -358,8 +360,7 @@ void tokenize(lexer_t *lexer, byte_slice tokens, size_t *token_count) {
         }
     }
 
-    push_token((token_t){.kind = T_EOF}, tokens.at, &next_token, tokens.len);
-    *token_count = next_token;
+    push_token(lexer, (token_t){.kind = T_EOF});
 }
 
 token_t peek_token(parser_t *parser) {
@@ -484,18 +485,16 @@ int main(int argc, char const *argv[]) {
     byte_slice file_data = {input_buffer, input_buffer_size};
     read_file(filename, &file_data);
 
-    lexer_t lexer = {
-        .bytes = file_data.at,
-        .len = file_data.len,
-        .position = 0,
-        .begin_i = 0,
+    lexer_t lexer = {.bytes = file_data.at,
+                     .len = file_data.len,
+                     .position = 0,
+                     .begin_i = 0,
+                     .tokens = (token_t *)token_buffer,
+                     .max_tokens = token_buffer_size / sizeof(token_t),
+                     .next_token = 0};
 
-    };
-
-    size_t token_count;
-    tokenize(&lexer,
-             (byte_slice){.at = (u8 *)token_buffer, .len = token_buffer_size},
-             &token_count);
+    tokenize(&lexer);
+    size_t token_count = lexer.next_token;
     token_t last = ((token_t *)token_buffer)[token_count - 1];
     if (last.kind != T_EOF) {
         u8 *to_string = format_token(last);
