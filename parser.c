@@ -39,6 +39,9 @@ typedef struct token {
 } token_t;
 
 typedef struct lexer {
+    struct {
+        char const *filename;
+    };
     u8 const *bytes;
     size_t len;
     size_t position;
@@ -63,6 +66,9 @@ typedef struct string_interner {
 } interner_t;
 
 typedef struct parser {
+    struct {
+        char const *filename;
+    };
     token_t *tokens;
     size_t len;
     size_t position;
@@ -390,7 +396,7 @@ lexer_result_t tokenize(lexer_t *lexer) {
 
         switch (c) {
         case '\0':
-            assert(lexer->position == (lexer->len - 1));
+            // assert(lexer->position == (lexer->len - 1));
             break;
 
         case '\n':
@@ -449,7 +455,7 @@ lexer_result_t tokenize(lexer_t *lexer) {
                 todo("escape sequences, et cetera.");
                 break;
             case '\0':
-                return;
+                return token_error(lexer, T_UNTERMINATED_STRING_LIT);
             default:
                 panic("unreachable code path");
             }
@@ -594,16 +600,24 @@ jvalue_type_t parse_value(parser_t *parser) {
     // array
     case T_LEFT_BRACKET: {
         advance(parser);
+        bool last_is_val = false;
+        bool consumed_val = false;
         while (parse_value(parser) != J_NONE) {
+            consumed_val = true;
+            last_is_val = true;
             if (!consume_token(parser, T_COMMA)) {
                 break;
             }
+            last_is_val = false;
         }
-        if (!consume_token(parser, T_RIGHT_BRACKET)) {
+        if (last_is_val || !consumed_val) {
+            if (!consume_token(parser, T_RIGHT_BRACKET)) {
+                return J_ERROR;
+            }
+            return J_ARRAY;
+        } else {
             return J_ERROR;
         }
-
-        return J_ARRAY;
     } break;
 
     // string
@@ -613,6 +627,10 @@ jvalue_type_t parse_value(parser_t *parser) {
 
     // numbers
     case T_MINUS:
+        // FIXME(yousef): this is actually bad.
+        // If there is whitespace after the token (which is already deleted),
+        // the literal shouldn't be accepted.
+        // Move logic to lexer.
         advance(parser);
         if (!consume_token(parser, T_NUMBER_LIT)) {
             return J_ERROR;
@@ -637,16 +655,25 @@ jvalue_type_t parse_value(parser_t *parser) {
         return J_NULL;
 
     default:
-        return J_ERROR;
+        return J_NONE;
     }
 }
 
 jvalue_type_t parse(parser_t *parser) {
-    assert(parser->len > 1);
+    if (parser->len < 1) {
+        panic("file=%s: parser->len<1", parser->filename);
+    }
     if (parser->tokens[0].kind == T_EOF) {
         return J_NONE;
     }
-    return parse_value(parser);
+    jvalue_type_t v = parse_value(parser);
+    if (v == J_NONE) {
+        if (parser->position != parser->len) {
+            return J_ERROR;
+        }
+    }
+
+    return v;
 }
 
 // MAYBE(yousef): hash table implementation.
@@ -683,10 +710,11 @@ int main(int argc, char const *argv[]) {
     read_file(filename, &file_data);
 
     u8 *line_info_buffer = string_pool + string_pool_size;
-    size_t line_info_buffer =
+    size_t line_info_buffer_size =
         (token_buffer_size / sizeof(token_t)) * sizeof(size_t);
 
     lexer_t lexer = {
+        .filename = CSTR(filename),
         .bytes = file_data.at,
         .len = file_data.len,
         .position = 0,
@@ -699,7 +727,11 @@ int main(int argc, char const *argv[]) {
         .current_line = 1,
     };
 
-    tokenize(&lexer);
+    lexer_result_t res = tokenize(&lexer);
+    if (res.kind == RES_LEXER_ERROR) {
+        panic("failed: byte %d [line=%d], t=%s, file=%s", res.position,
+              res.line, format_token(res.fragment), lexer.filename);
+    }
     size_t token_count = lexer.next_token;
     token_t last = ((token_t *)token_buffer)[token_count - 1];
 
@@ -708,8 +740,10 @@ int main(int argc, char const *argv[]) {
         char *formatted = format_token(e);
         dbg("tokens[%d]: %s", i, formatted);
     }
-    parser_t parser = {
-        .tokens = token_buffer, .len = token_count, .position = 0};
+    parser_t parser = {.filename = lexer.filename,
+                       .tokens = token_buffer,
+                       .len = token_count,
+                       .position = 0};
 
     jvalue_type_t val = parse(&parser);
 
