@@ -47,6 +47,9 @@ typedef struct lexer {
     token_t *tokens;
     size_t max_tokens;
     size_t next_token;
+
+    size_t *line_info;
+    size_t current_line;
 } lexer_t;
 
 typedef struct string_interner {
@@ -104,6 +107,7 @@ bool push_token(lexer_t *lexer, token_t t) {
     if (at + 1 <= lexer->max_tokens) {
         lexer->tokens[at] = t;
         lexer->next_token += 1;
+        lexer->line_info[at] = lexer->current_line;
         return true;
     }
     return false;
@@ -293,15 +297,22 @@ bool match_consume_nonzero(lexer_t *lexer) {
 }
 
 typedef enum result {
-    RES_NONE,
-    RES_SOME,
-    RES_ERROR,
+    RES_NONE = 0,
+    RES_LEXER_NONE = RES_NONE,
+    RES_PARSER_NONE = RES_NONE,
+
+    RES_LEXER_SOME,
+    RES_LEXER_ERROR,
+
+    RES_OUT_OF_SPACE = 0xFFFF,
 } result_t;
+
+#define LEXER_OUT_OF_SPACE ((lexer_result_t){RES_OUT_OF_SPACE})
 
 result_t match_fraction(lexer_t *lexer) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
-        return RES_NONE;
+        return RES_LEXER_NONE;
     }
 
     u8 c = lexer->bytes[pos];
@@ -309,21 +320,21 @@ result_t match_fraction(lexer_t *lexer) {
     if (c == '.') {
         lexer->position += 1;
         if (!match_consume_digit(lexer)) {
-            return RES_ERROR;
+            return RES_LEXER_ERROR;
         }
 
         while (match_consume_digit(lexer)) {
         }
 
-        return RES_SOME;
+        return RES_LEXER_SOME;
     }
-    return RES_NONE;
+    return RES_LEXER_NONE;
 }
 
 result_t match_exponent(lexer_t *lexer) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
-        return RES_NONE;
+        return RES_LEXER_NONE;
     }
 
     u8 c = lexer->bytes[pos];
@@ -340,20 +351,38 @@ result_t match_exponent(lexer_t *lexer) {
                 }
             }
 
-            return RES_ERROR;
+            return RES_LEXER_ERROR;
         }
 
     resume:
         while (match_consume_digit(lexer)) {
         }
-        return RES_SOME;
+        return RES_LEXER_SOME;
     }
-    return RES_NONE;
+    return RES_LEXER_NONE;
 }
 
-void tokenize(lexer_t *lexer) {
+typedef struct lexer_result {
+    result_t kind;
+    size_t position;
+    size_t line;
+    token_t fragment;
+} lexer_result_t;
+
+lexer_result_t token_error(lexer_t *lexer, token_type_t token_kind) {
+    size_t len = lexer->position - lexer->begin_i;
+    token_t t = {.kind = token_kind,
+                 .byte_sequence =
+                     INTERN(SLICE(lexer->bytes + lexer->begin_i, len))};
+
+    return (lexer_result_t){RES_LEXER_ERROR, lexer->begin_i,
+                            lexer->current_line, t};
+}
+
+lexer_result_t tokenize(lexer_t *lexer) {
     u8 c;
     size_t next_token = 0;
+    size_t line_number = 1;
 
     while (lexer->position < lexer->len) {
         c = consume(lexer);
@@ -361,11 +390,13 @@ void tokenize(lexer_t *lexer) {
 
         switch (c) {
         case '\0':
-            assert(lexer->position == lexer->len - 1);
+            assert(lexer->position == (lexer->len - 1));
             break;
 
-        case ' ':
         case '\n':
+            lexer->current_line++;
+            break;
+        case ' ':
         case '\r':
         case '\t':
             // ignore whitespace
@@ -391,12 +422,10 @@ void tokenize(lexer_t *lexer) {
             if (equals(string, expect)) {
                 if (!push_token(lexer, (token_t){expected_type,
                                                  .byte_sequence = expect})) {
-
-                    panic("ran out of space for tokens");
+                    return LEXER_OUT_OF_SPACE;
                 }
             } else {
-                // TODO(yousef): push offending token?
-                return;
+                return token_error(lexer, T_UNKNOWN);
             }
         } break;
 
@@ -412,7 +441,9 @@ void tokenize(lexer_t *lexer) {
             switch (last) {
             case '"':
                 token_t t = (token_t){T_STRING_LIT, .byte_sequence = slice};
-                push_token(lexer, t);
+                if (!push_token(lexer, t)) {
+                    return LEXER_OUT_OF_SPACE;
+                }
                 break;
             case '\\':
                 todo("escape sequences, et cetera.");
@@ -434,50 +465,74 @@ void tokenize(lexer_t *lexer) {
         // sign = epsilon | '-' | '+'
         case '0': {
             if (match_consume_digit(lexer)) {
-                // 01 (et cetera) not allowed
-                return;
+                return token_error(lexer, T_NUMBER_LIT);
             }
-        } break;
+            if (match_fraction(lexer) == RES_LEXER_ERROR) {
+                return token_error(lexer, T_NUMBER_LIT);
+            }
+            if (match_exponent(lexer) == RES_LEXER_ERROR) {
+                return token_error(lexer, T_NUMBER_LIT);
+            }
+
+            size_t len = lexer->position - lexer->begin_i;
+            byte_slice slice =
+                INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
+            token_t t = {
+                .kind = T_NUMBER_LIT,
+                .byte_sequence = slice,
+            };
+            if (!push_token(lexer, t)) {
+                return LEXER_OUT_OF_SPACE;
+            }
+            break;
+        }
 
         default: {
             token_type_t type;
             if (c >= '1' && c <= '9') {
                 while (match_consume_digit(lexer)) {
                 }
-                if (match_fraction(lexer) == RES_ERROR) {
-                    return;
+
+                if (match_fraction(lexer) == RES_LEXER_ERROR) {
+                    return token_error(lexer, T_NUMBER_LIT);
                 }
 
-                if (match_exponent(lexer) == RES_ERROR) {
-                    return;
+                if (match_exponent(lexer) == RES_LEXER_ERROR) {
+                    return token_error(lexer, T_NUMBER_LIT);
                 }
                 size_t len = lexer->position - lexer->begin_i;
                 byte_slice slice =
                     INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
+
                 token_t t = {
                     .kind = T_NUMBER_LIT,
                     .byte_sequence = slice,
                 };
-                push_token(lexer, t);
+                if (!push_token(lexer, t)) {
+                    return LEXER_OUT_OF_SPACE;
+                }
+
             } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
                 token_t t = (token_t){type, c};
                 if (!push_token(lexer, t)) {
-                    panic("ran out of space for tokens");
+                    return LEXER_OUT_OF_SPACE;
                 }
             } else {
                 while (MATCH_CONSUME_IDENT_CHAR(lexer)) {
                 }
-                size_t len = lexer->position - lexer->begin_i;
-                byte_slice slice =
-                    INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
-                return;
+                return token_error(lexer, T_UNKNOWN);
             }
         } break;
         }
     }
 
-    push_token(lexer, (token_t){.kind = T_EOF});
+    if (!push_token(lexer, (token_t){.kind = T_EOF})) {
+        return LEXER_OUT_OF_SPACE;
+    }
+    return (lexer_result_t){
+        RES_LEXER_NONE,
+    };
 }
 
 token_t peek_token(parser_t *parser) {
@@ -627,13 +682,22 @@ int main(int argc, char const *argv[]) {
     byte_slice file_data = {input_buffer, input_buffer_size};
     read_file(filename, &file_data);
 
-    lexer_t lexer = {.bytes = file_data.at,
-                     .len = file_data.len,
-                     .position = 0,
-                     .begin_i = 0,
-                     .tokens = (token_t *)token_buffer,
-                     .max_tokens = token_buffer_size / sizeof(token_t),
-                     .next_token = 0};
+    u8 *line_info_buffer = string_pool + string_pool_size;
+    size_t line_info_buffer =
+        (token_buffer_size / sizeof(token_t)) * sizeof(size_t);
+
+    lexer_t lexer = {
+        .bytes = file_data.at,
+        .len = file_data.len,
+        .position = 0,
+        .begin_i = 0,
+        .tokens = (token_t *)token_buffer,
+        .max_tokens = token_buffer_size / sizeof(token_t),
+        .next_token = 0,
+
+        .line_info = (size_t *)line_info_buffer,
+        .current_line = 1,
+    };
 
     tokenize(&lexer);
     size_t token_count = lexer.next_token;
