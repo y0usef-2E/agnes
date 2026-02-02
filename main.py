@@ -24,7 +24,7 @@ def build(with_build_log: bool):
         os.chdir("build")
         subprocess.run(["gcc", source_file, "-o", "{exec}"])
         os.chdir("..")        
-
+"""
 argparser = argparse.ArgumentParser(
     prog="agnes", description="JSON parser."
 )
@@ -37,7 +37,6 @@ args = argparser.parse_args()
 file_path = args.file
 with_build_log = args.build_log
 
-build(with_build_log)
 
 if not os.path.exists(file_path):
     print("[IO Error] file not found.")
@@ -47,9 +46,46 @@ if not os.path.isfile(file_path):
     print("[INPUT ERROR] expected source file, found directory.")
     sys.exit(1)
 
-absolute_path = os.path.abspath(file_path)
-file_size = os.path.getsize(absolute_path)
+"""
+from pathlib import Path
+
+paths: list[Path] = []
+expect: list[bool] = []
+
+os.chdir("test_parsing")
+
+passing = Path("yes")
+
+for p in passing.iterdir():
+    assert p.is_file()
+    paths.append(p.absolute())
+    expect.append(True)
+
+failing = Path("no")
+for f in failing.iterdir(): 
+    assert f.is_file()
+    paths.append(f.absolute())
+    expect.append(False)
+
+indeterminate = Path("indeterminate")
+
+os.chdir("..")
+build(True)
+
+import time
 
 os.chdir("build")
-subprocess.run([exec, absolute_path, str(file_size)])
+with open(f"log_{time.time()}.csv", "w") as output_log:
+    for i in range (0, len(expect)):
+        proc = subprocess.run([exec, paths[i]])
+        result = "Fail"
+        if expect[i]==True and proc.returncode == 0:
+            result = "Pass"
+        elif expect[i] ==False and proc.returncode !=0:
+            result = "Pass"
+        
+        simple_name = paths[i].name
+        output_log.write(f"{simple_name}, {result}\n")
+        
+    
 os.chdir("..")

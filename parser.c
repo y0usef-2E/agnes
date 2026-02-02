@@ -74,6 +74,7 @@ typedef enum value_type {
     J_TRUE,
     J_FALSE,
     J_NULL,
+    J_ERROR,
 } jvalue_type_t;
 
 typedef struct json_result {
@@ -516,19 +517,20 @@ jvalue_type_t parse_value(parser_t *parser) {
         advance(parser);
         while (consume_token(parser, T_STRING_LIT)) {
             if (!consume_token(parser, T_COLON)) {
-                return J_NONE; // for now just exit function completely,
-                               // later do better error handling
+                return J_ERROR; // for now just exit function completely,
+                                // later do better error handling
             }
             jvalue_type_t val = parse_value(parser);
-            if (val == J_NONE) {
-                return J_NONE;
+            assert(val != J_NONE);
+            if (val == J_ERROR) {
+                return J_ERROR;
             }
             if (!consume_token(parser, T_COMMA)) {
                 break;
             }
         }
         if (!consume_token(parser, T_RIGHT_CURLY)) {
-            return J_NONE;
+            return J_ERROR;
         }
 
         return J_OBJECT;
@@ -543,7 +545,7 @@ jvalue_type_t parse_value(parser_t *parser) {
             }
         }
         if (!consume_token(parser, T_RIGHT_BRACKET)) {
-            return J_NONE;
+            return J_ERROR;
         }
 
         return J_ARRAY;
@@ -558,7 +560,7 @@ jvalue_type_t parse_value(parser_t *parser) {
     case T_MINUS:
         advance(parser);
         if (!consume_token(parser, T_NUMBER_LIT)) {
-            return J_NONE;
+            return J_ERROR;
         }
         token_t num = parser->tokens[parser->position - 1];
         return J_NUMBER;
@@ -580,27 +582,36 @@ jvalue_type_t parse_value(parser_t *parser) {
         return J_NULL;
 
     default:
-        return J_NONE;
+        return J_ERROR;
     }
 }
 
-jvalue_type_t parse(parser_t *parser) { return parse_value(parser); }
+jvalue_type_t parse(parser_t *parser) {
+    assert(parser->len > 1);
+    if (parser->tokens[0].kind == T_EOF) {
+        return J_NONE;
+    }
+    return parse_value(parser);
+}
 
+// MAYBE(yousef): hash table implementation.
+// TODO(yousef): public API.
+// TODO(yousef): testing.
 int main(int argc, char const *argv[]) {
     dbg("sizeof token: %zu bytes", sizeof(token_t));
 
     // NOTE(yousef): arguments to main are validated somewhere else.
     char const *filename = argv[1];
-    size_t file_size = (size_t)atoi(argv[2]); // in bytes
+    size_t max_file_size = MiB(600u);
 
-    size_t pool_size = file_size + MiB(300u);
+    size_t pool_size = max_file_size + MiB(300u);
     u8 *reserved_memory_pool;
     if (!alloc_commit(pool_size, &reserved_memory_pool)) {
         panic("unable to allocate required memory at start up");
     }
 
     u8 *input_buffer = reserved_memory_pool;
-    size_t input_buffer_size = file_size;
+    size_t input_buffer_size = max_file_size;
 
     u8 *token_buffer = reserved_memory_pool + input_buffer_size;
     size_t token_buffer_size = MiB(40u);
@@ -627,10 +638,6 @@ int main(int argc, char const *argv[]) {
     tokenize(&lexer);
     size_t token_count = lexer.next_token;
     token_t last = ((token_t *)token_buffer)[token_count - 1];
-    if (last.kind != T_EOF) {
-        u8 *to_string = format_token(last);
-        panic("token %s", to_string);
-    }
 
     for (int i = 0; i < token_count; ++i) {
         token_t e = ((token_t *)token_buffer)[i];
@@ -641,5 +648,9 @@ int main(int argc, char const *argv[]) {
         .tokens = token_buffer, .len = token_count, .position = 0};
 
     jvalue_type_t val = parse(&parser);
-    dbg(format_jvalue(val));
+
+    if (val != J_ERROR) {
+        assert(val != J_NONE);
+        return EXIT_SUCCESS;
+    }
 }

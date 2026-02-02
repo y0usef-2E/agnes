@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#define DEBUG_LOG 1
+#define DEBUG_LOG 0
 
 #define KiB(n) (n * 1024u)
 #define MiB(n) (KiB(n) * 1024u)
