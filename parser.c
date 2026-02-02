@@ -28,21 +28,13 @@ typedef enum token_type {
     T_EOF = 0xFFFFFFFF,
 } token_type_t;
 
-typedef struct number_lit {
-    union {
-        u64 integral;
-        double floating;
-    };
-} number_lit_t;
-
 typedef struct token {
     enum token_type kind;
     union {
         struct {
             char simple_token;
         };
-        struct number_lit num;
-        byte_slice byte_sequence; // used for unidentified tokens
+        byte_slice byte_sequence; // used for unidentified tokens as well
     };
 } token_t;
 
@@ -206,7 +198,7 @@ char const *format_jvalue(jvalue_type_t kind) {
         return CSTR("STRING");
 
     case J_NUMBER:
-        todo("number formatting");
+        return CSTR("NUMBER");
     }
 }
 
@@ -260,9 +252,102 @@ char const *format_token(token_t t) {
             .at;
     } break;
 
-    case T_NUMBER_LIT:
-        return "NUMBER";
+    case T_NUMBER_LIT: {
+        __fmt("NUMBER(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
     }
+}
+
+bool match_consume_digit(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return false;
+    }
+
+    u8 c = lexer->bytes[pos];
+    if (c >= '0' && c <= '9') {
+        lexer->position += 1;
+        return true;
+    }
+
+    return false;
+}
+
+bool match_consume_nonzero(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return false;
+    }
+
+    u8 c = lexer->bytes[pos];
+    if (c >= '1' && c <= '9') {
+        lexer->position += 1;
+        return true;
+    }
+
+    return false;
+}
+
+typedef enum result {
+    RES_NONE,
+    RES_SOME,
+    RES_ERROR,
+} result_t;
+
+result_t match_fraction(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return RES_NONE;
+    }
+
+    u8 c = lexer->bytes[pos];
+
+    if (c == '.') {
+        lexer->position += 1;
+        if (!match_consume_digit(lexer)) {
+            return RES_ERROR;
+        }
+
+        while (match_consume_digit(lexer)) {
+        }
+
+        return RES_SOME;
+    }
+    return RES_NONE;
+}
+
+result_t match_exponent(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return RES_NONE;
+    }
+
+    u8 c = lexer->bytes[pos];
+    if (c == 'E' || c == 'e') {
+        lexer->position += 1;
+
+        if (match_consume_digit(lexer)) {
+            goto resume;
+        } else {
+            u8 k = consume(lexer);
+            if (k == '+' || k == '-') {
+                if (match_consume_digit(lexer)) {
+                    goto resume;
+                }
+            }
+
+            return RES_ERROR;
+        }
+
+    resume:
+        while (match_consume_digit(lexer)) {
+        }
+        return RES_SOME;
+    }
+    return RES_NONE;
 }
 
 void tokenize(lexer_t *lexer) {
@@ -277,6 +362,7 @@ void tokenize(lexer_t *lexer) {
         case '\0':
             assert(lexer->position == lexer->len - 1);
             break;
+
         case ' ':
         case '\n':
         case '\r':
@@ -337,10 +423,41 @@ void tokenize(lexer_t *lexer) {
             }
         } break;
 
+        // number = integer fraction exponent
+        // integer = digit | nonzero digits
+        // digits = digit | digit digits
+        // digit = '0' | nonzero
+        // nonzero = '1' | '2' | ... | '9'
+        // fraction = epsilon | '.' digits
+        // exponent = epsilon | ('E' | 'e') sign digits
+        // sign = epsilon | '-' | '+'
+        case '0': {
+            if (match_consume_digit(lexer)) {
+                // 01 (et cetera) not allowed
+                return;
+            }
+        } break;
+
         default: {
             token_type_t type;
-            if (c >= '0' && c <= '9') {
-                // number
+            if (c >= '1' && c <= '9') {
+                while (match_consume_digit(lexer)) {
+                }
+                if (match_fraction(lexer) == RES_ERROR) {
+                    return;
+                }
+
+                if (match_exponent(lexer) == RES_ERROR) {
+                    return;
+                }
+                size_t len = lexer->position - lexer->begin_i;
+                byte_slice slice =
+                    INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
+                token_t t = {
+                    .kind = T_NUMBER_LIT,
+                    .byte_sequence = slice,
+                };
+                push_token(lexer, t);
             } else if (((type = map_char[c]) & T_SIMPLE) == T_SIMPLE) {
                 token_t t = (token_t){type, c};
                 if (!push_token(lexer, t)) {
@@ -439,12 +556,18 @@ jvalue_type_t parse_value(parser_t *parser) {
 
     // numbers
     case T_MINUS:
+        advance(parser);
+        if (!consume_token(parser, T_NUMBER_LIT)) {
+            return J_NONE;
+        }
+        token_t num = parser->tokens[parser->position - 1];
+        return J_NUMBER;
+
     case T_NUMBER_LIT:
         advance(parser);
-        todo("parsing numbers");
+        return J_NUMBER;
 
     case T_TRUE:
-        dbg("here");
         advance(parser);
         return J_TRUE;
 
