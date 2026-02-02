@@ -197,11 +197,10 @@ char const *format_jvalue(jvalue_type_t kind) {
         return CSTR("NULL");
 
     case J_ARRAY:
-        todo("array formatting");
-        break;
+        return CSTR("ARRAY[...]");
 
     case J_OBJECT:
-        return CSTR("OBJ");
+        return CSTR("OBJ{...}");
 
     case J_STRING:
         return CSTR("STRING");
@@ -419,9 +418,19 @@ jvalue_type_t parse_value(parser_t *parser) {
     } break;
 
     // array
-    case T_LEFT_BRACKET:
+    case T_LEFT_BRACKET: {
         advance(parser);
-        todo("arrays");
+        while (parse_value(parser) != J_NONE) {
+            if (!consume_token(parser, T_COMMA)) {
+                break;
+            }
+        }
+        if (!consume_token(parser, T_RIGHT_BRACKET)) {
+            return J_NONE;
+        }
+
+        return J_ARRAY;
+    } break;
 
     // string
     case T_STRING_LIT:
@@ -444,11 +453,10 @@ jvalue_type_t parse_value(parser_t *parser) {
         return J_FALSE;
 
     case T_NULL:
-        todo("incomplete parser");
-        break;
+        advance(parser);
+        return J_NULL;
 
     default:
-        // unexpected token
         return J_NONE;
     }
 }
