@@ -24,11 +24,14 @@ def build(with_build_log: bool):
         os.chdir("build")
         subprocess.run(["gcc", source_file, "-o", "{exec}"])
         os.chdir("..")        
-"""
 argparser = argparse.ArgumentParser(
     prog="agnes", description="JSON parser."
 )
 
+argparser.add_argument("--restrict", type=str, default=None)
+
+args = argparser.parse_args()
+"""
 argparser.add_argument("file")
 argparser.add_argument('--build-log', action=argparse.BooleanOptionalAction, default=True)
 
@@ -55,19 +58,31 @@ expect: list[bool] = []
 os.chdir("test_parsing")
 
 passing = Path("yes")
-
-for p in passing.iterdir():
-    assert p.is_file()
-    paths.append(p.absolute())
-    expect.append(True)
+for file in passing.iterdir():
+    assert file.is_file()
+    if args.restrict is not None: 
+        pref = "y_" + args.restrict 
+        if file.name.startswith(pref):
+            print(file)
+            paths.append(file.absolute())
+            expect.append(True)    
+    else:
+        paths.append(file.absolute())
+        expect.append(True)
 
 failing = Path("no")
-for f in failing.iterdir(): 
-    assert f.is_file()
-    paths.append(f.absolute())
-    expect.append(False)
+for file in failing.iterdir(): 
+    assert file.is_file()
+    if args.restrict is not None:
+        pref = "n_" + args.restrict 
+        if file.name.startswith(pref):
+            print(file)
+            paths.append(file.absolute())
+            expect.append(False)    
+    else:
+        paths.append(file.absolute())
+        expect.append(False)
 
-indeterminate = Path("indeterminate")
 
 os.chdir("..")
 build(True)
@@ -75,6 +90,7 @@ build(True)
 import time
 
 os.chdir("build")
+print(f"running {len(paths)} tests: MODE=", args.restrict if args.restrict else "ALL")
 with open(f"log_{time.time()}.csv", "w") as output_log:
     for i in range (0, len(expect)):
         proc = subprocess.run([exec, paths[i]])

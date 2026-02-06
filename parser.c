@@ -667,12 +667,9 @@ jvalue_type_t parse(parser_t *parser) {
         return J_NONE;
     }
     jvalue_type_t v = parse_value(parser);
-    if (v == J_NONE) {
-        if (parser->position != parser->len) {
-            return J_ERROR;
-        }
+    if (!consume_token(parser, T_EOF)) {
+        return J_ERROR;
     }
-
     return v;
 }
 
@@ -751,4 +748,6 @@ int main(int argc, char const *argv[]) {
         assert(val != J_NONE);
         return EXIT_SUCCESS;
     }
+
+    return EXIT_FAILURE;
 }
