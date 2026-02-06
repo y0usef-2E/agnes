@@ -91,7 +91,7 @@ import time
 
 os.chdir("build")
 print(f"running {len(paths)} tests: MODE=", args.restrict if args.restrict else "ALL")
-with open(f"log_{time.time()}.csv", "w") as output_log:
+with open(f"0_log_{time.time()}.csv", "w") as output_log:
     for i in range (0, len(expect)):
         proc = subprocess.run([exec, paths[i]])
         result = "Fail"

@@ -573,25 +573,33 @@ jvalue_type_t parse_value(parser_t *parser) {
     // obj
     case T_LEFT_CURLY: {
         advance(parser);
+        bool last_is_pair = false;
+        bool consumed_pair = false;
         while (consume_token(parser, T_STRING_LIT)) {
             if (!consume_token(parser, T_COLON)) {
                 return J_ERROR; // for now just exit function completely,
                                 // later do better error handling
             }
             jvalue_type_t val = parse_value(parser);
-            assert(val != J_NONE);
-            if (val == J_ERROR) {
+            if (val == J_ERROR || val == J_NONE) {
                 return J_ERROR;
             }
+
+            consumed_pair = true;
+            last_is_pair = true;
             if (!consume_token(parser, T_COMMA)) {
                 break;
             }
+            last_is_pair = false;
         }
-        if (!consume_token(parser, T_RIGHT_CURLY)) {
+        if (last_is_pair || !consumed_pair) {
+            if (!consume_token(parser, T_RIGHT_CURLY)) {
+                return J_ERROR;
+            }
+            return J_OBJECT;
+        } else {
             return J_ERROR;
         }
-
-        return J_OBJECT;
     } break;
 
     // array
