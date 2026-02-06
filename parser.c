@@ -15,7 +15,6 @@ typedef enum token_type {
     T_RIGHT_CURLY = T_SIMPLE | 0x8u,
     T_COMMA = T_SIMPLE | 0x10u,
     T_COLON = T_SIMPLE | 0x20u,
-    T_MINUS = T_SIMPLE | 0x40u,
 
     T_TRUE = T_SIMPLE | 0x80u,
     T_FALSE = T_SIMPLE | 0x100u,
@@ -97,7 +96,7 @@ static interner_t interner = {0};
 static enum token_type map_char[256] = {
     [':'] = T_COLON,         [','] = T_COMMA,      ['['] = T_LEFT_BRACKET,
     [']'] = T_RIGHT_BRACKET, ['{'] = T_LEFT_CURLY, ['}'] = T_RIGHT_CURLY,
-    ['-'] = T_MINUS};
+};
 
 u8 consume(lexer_t *lexer) {
     size_t pos = lexer->position;
@@ -233,8 +232,6 @@ char const *format_token(token_t t) {
         return CSTR("COMMA");
     case T_COLON:
         return CSTR("COLON");
-    case T_MINUS:
-        return CSTR("MINUS");
     case T_TRUE:
         return CSTR("TRUE");
     case T_FALSE:
@@ -272,29 +269,18 @@ char const *format_token(token_t t) {
     }
 }
 
-bool match_consume_digit(lexer_t *lexer) {
+#define MATCH_CONSUME_ZERO(lexer) match_consume_digit(lexer, 0, 0)
+#define MATCH_CONSUME_NONZERO(lexer) match_consume_digit(lexer, 1, 9)
+#define MATCH_CONSUME_ANY_DIGIT(lexer) match_consume_digit(lexer, 0, 9)
+
+bool match_consume_digit(lexer_t *lexer, u8 start, u8 end) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return false;
     }
 
     u8 c = lexer->bytes[pos];
-    if (c >= '0' && c <= '9') {
-        lexer->position += 1;
-        return true;
-    }
-
-    return false;
-}
-
-bool match_consume_nonzero(lexer_t *lexer) {
-    size_t pos = lexer->position;
-    if (pos >= lexer->len) {
-        return false;
-    }
-
-    u8 c = lexer->bytes[pos];
-    if (c >= '1' && c <= '9') {
+    if (c >= start && c <= end) {
         lexer->position += 1;
         return true;
     }
@@ -325,11 +311,11 @@ result_t match_fraction(lexer_t *lexer) {
 
     if (c == '.') {
         lexer->position += 1;
-        if (!match_consume_digit(lexer)) {
+        if (!MATCH_CONSUME_ANY_DIGIT(lexer)) {
             return RES_LEXER_ERROR;
         }
 
-        while (match_consume_digit(lexer)) {
+        while (MATCH_CONSUME_ANY_DIGIT(lexer)) {
         }
 
         return RES_LEXER_SOME;
@@ -347,12 +333,12 @@ result_t match_exponent(lexer_t *lexer) {
     if (c == 'E' || c == 'e') {
         lexer->position += 1;
 
-        if (match_consume_digit(lexer)) {
+        if (MATCH_CONSUME_ANY_DIGIT(lexer)) {
             goto resume;
         } else {
             u8 k = consume(lexer);
             if (k == '+' || k == '-') {
-                if (match_consume_digit(lexer)) {
+                if (MATCH_CONSUME_ANY_DIGIT(lexer)) {
                     goto resume;
                 }
             }
@@ -361,7 +347,7 @@ result_t match_exponent(lexer_t *lexer) {
         }
 
     resume:
-        while (match_consume_digit(lexer)) {
+        while (MATCH_CONSUME_ANY_DIGIT(lexer)) {
         }
         return RES_LEXER_SOME;
     }
@@ -395,6 +381,16 @@ lexer_result_t tokenize(lexer_t *lexer) {
         lexer->begin_i = lexer->position - 1;
 
         switch (c) {
+        case '-':
+            if (lexer->len > lexer->position) {
+                if (MATCH_CONSUME_NONZERO(lexer)) {
+                    goto lex_one_to_nine;
+                } else if (MATCH_CONSUME_ZERO(lexer)) {
+                    goto lex_zero;
+                }
+            }
+            return token_error(lexer, T_NUMBER_LIT);
+
         case '\0':
             // assert(lexer->position == (lexer->len - 1));
             break;
@@ -469,8 +465,9 @@ lexer_result_t tokenize(lexer_t *lexer) {
         // fraction = epsilon | '.' digits
         // exponent = epsilon | ('E' | 'e') sign digits
         // sign = epsilon | '-' | '+'
+        lex_zero:
         case '0': {
-            if (match_consume_digit(lexer)) {
+            if (MATCH_CONSUME_ANY_DIGIT(lexer)) {
                 return token_error(lexer, T_NUMBER_LIT);
             }
             if (match_fraction(lexer) == RES_LEXER_ERROR) {
@@ -495,8 +492,9 @@ lexer_result_t tokenize(lexer_t *lexer) {
 
         default: {
             token_type_t type;
+        lex_one_to_nine:
             if (c >= '1' && c <= '9') {
-                while (match_consume_digit(lexer)) {
+                while (MATCH_CONSUME_ANY_DIGIT(lexer)) {
                 }
 
                 if (match_fraction(lexer) == RES_LEXER_ERROR) {
@@ -624,19 +622,6 @@ jvalue_type_t parse_value(parser_t *parser) {
     case T_STRING_LIT:
         advance(parser);
         return J_STRING;
-
-    // numbers
-    case T_MINUS:
-        // FIXME(yousef): this is actually bad.
-        // If there is whitespace after the token (which is already deleted),
-        // the literal shouldn't be accepted.
-        // Move logic to lexer.
-        advance(parser);
-        if (!consume_token(parser, T_NUMBER_LIT)) {
-            return J_ERROR;
-        }
-        token_t num = parser->tokens[parser->position - 1];
-        return J_NUMBER;
 
     case T_NUMBER_LIT:
         advance(parser);
