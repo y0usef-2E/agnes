@@ -269,9 +269,9 @@ char const *format_token(token_t t) {
     }
 }
 
-#define MATCH_CONSUME_ZERO(lexer) match_consume_digit(lexer, 0, 0)
-#define MATCH_CONSUME_NONZERO(lexer) match_consume_digit(lexer, 1, 9)
-#define MATCH_CONSUME_ANY_DIGIT(lexer) match_consume_digit(lexer, 0, 9)
+#define MATCH_CONSUME_ZERO(lexer) match_consume_digit(lexer, '0', '0')
+#define MATCH_CONSUME_NONZERO(lexer) match_consume_digit(lexer, '1', '9')
+#define MATCH_CONSUME_ANY_DIGIT(lexer) match_consume_digit(lexer, '0', '9')
 
 bool match_consume_digit(lexer_t *lexer, u8 start, u8 end) {
     size_t pos = lexer->position;
@@ -392,8 +392,7 @@ lexer_result_t tokenize(lexer_t *lexer) {
             return token_error(lexer, T_NUMBER_LIT);
 
         case '\0':
-            // assert(lexer->position == (lexer->len - 1));
-            break;
+            return token_error(lexer, T_UNKNOWN);
 
         case '\n':
             lexer->current_line++;
@@ -457,16 +456,16 @@ lexer_result_t tokenize(lexer_t *lexer) {
             }
         } break;
 
-        // number = integer fraction exponent
-        // integer = digit | nonzero digits
-        // digits = digit | digit digits
-        // digit = '0' | nonzero
-        // nonzero = '1' | '2' | ... | '9'
-        // fraction = epsilon | '.' digits
-        // exponent = epsilon | ('E' | 'e') sign digits
-        // sign = epsilon | '-' | '+'
-        lex_zero:
+            // number = integer fraction exponent
+            // integer = digit | nonzero digits
+            // digits = digit | digit digits
+            // digit = '0' | nonzero
+            // nonzero = '1' | '2' | ... | '9'
+            // fraction = epsilon | '.' digits
+            // exponent = epsilon | ('E' | 'e') sign digits
+            // sign = epsilon | '-' | '+'
         case '0': {
+        lex_zero:
             if (MATCH_CONSUME_ANY_DIGIT(lexer)) {
                 return token_error(lexer, T_NUMBER_LIT);
             }
@@ -492,8 +491,8 @@ lexer_result_t tokenize(lexer_t *lexer) {
 
         default: {
             token_type_t type;
-        lex_one_to_nine:
             if (c >= '1' && c <= '9') {
+            lex_one_to_nine:
                 while (MATCH_CONSUME_ANY_DIGIT(lexer)) {
                 }
 
