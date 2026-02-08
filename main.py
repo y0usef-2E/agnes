@@ -59,13 +59,13 @@ expect: list[bool] = []
 os.chdir("test_parsing")
 
 if args.top:
-    input = Path(args.top)
+    input = Path(args.top).absolute()
     assert input.exists()
     assert input.is_file() 
     os.chdir("..")
     build(True)
     os.chdir("build")
-    proc = subprocess.run([exec, input.absolute()])
+    proc = subprocess.run([exec, input])
     print("Got back: ", proc.returncode)
 
 else:

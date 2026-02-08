@@ -1,3 +1,5 @@
 build
 test.json
 prepare.bat
+test_parsing/one_gig.json
+test_parsing/hundmegs.json

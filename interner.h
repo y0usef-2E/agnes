@@ -13,16 +13,25 @@ typedef struct string_interner {
     u8 *string_stack;
     size_t next_string;
     size_t stack_size;
+
+    allocator_t allocator;
 } interner_t;
 
 #if defined(AG_INTERNER_IMPLEMENT)
 static interner_t interner = {.next_string = UINT64_MAX};
 
-void init_global_interner(u8 *allocated_memory, size_t size) {
+bool init_global_interner(allocator_t allocator, size_t init_size) {
+    u8 *buffer;
+    if (allocator.alloc == NULL || !allocator.alloc(init_size, &buffer)) {
+        return false;
+    }
+
     interner.string_table = NULL;
-    interner.string_stack = allocated_memory;
-    interner.stack_size = size;
+    interner.string_stack = buffer;
+    interner.stack_size = init_size;
     interner.next_string = 0;
+
+    interner.allocator = allocator;
 }
 
 #define STR(src) intern_cstring(src)

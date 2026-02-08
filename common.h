@@ -20,6 +20,12 @@ typedef struct byte_slice {
     size_t len;
 } byte_slice;
 
+typedef struct allocator {
+    bool (*alloc)(size_t, u8 **out);
+    bool (*realloc)(size_t, u8 *in, u8 **out);
+    void (*free)(u8 *);
+} allocator_t;
+
 #define MAX_FORMATTED_STRING_SIZE 512
 static char formatted_string[MAX_FORMATTED_STRING_SIZE];
 

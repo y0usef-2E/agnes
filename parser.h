@@ -111,8 +111,7 @@ typedef struct agnes_parser {
 
     size_t *line_info;
 
-    u8 *string_pool;
-    size_t string_pool_size;
+    allocator_t string_allocator;
 } agnes_parser_t;
 
 // 'public' API
@@ -639,11 +638,11 @@ static agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
         .current_line = 1,
     };
 
-    init_global_interner(agnes_parser->string_pool,
-                         agnes_parser->string_pool_size);
+    init_global_interner(agnes_parser->string_allocator,
+                         (agnes_parser->file_size / 4));
 
     agnes_result_t res = tokenize(&lexer);
-    if (res.kind == RES_LEXER_ERROR) {
+    if (res.kind == RES_LEXER_ERROR || res.kind == RES_OUT_OF_SPACE) {
         return res;
     }
 
