@@ -1,9 +1,11 @@
+#if !defined(AG_PARSER_H)
+#define AG_PARSER_H
+
 #include "common.h"
-#include "platform.c"
 #include <assert.h>
 
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
+#define AG_INTERNER_IMPLEMENT
+#include "interner.h"
 
 typedef enum token_type {
     T_NONE = 0u,
@@ -54,16 +56,6 @@ typedef struct lexer {
     size_t current_line;
 } lexer_t;
 
-typedef struct string_interner {
-    struct {
-        char *key;
-        byte_slice value;
-    } *string_table;
-    u8 *string_stack;
-    size_t next_string;
-    size_t stack_size;
-} interner_t;
-
 typedef struct parser {
     struct {
         char const *filename;
@@ -73,7 +65,7 @@ typedef struct parser {
     size_t position;
 } parser_t;
 
-typedef enum value_type {
+typedef enum jvalue_kind {
     J_NONE = 0,
     J_OBJECT,
     J_ARRAY,
@@ -83,22 +75,58 @@ typedef enum value_type {
     J_FALSE,
     J_NULL,
     J_ERROR,
-} jvalue_type_t;
+} jvalue_kind_t;
 
-typedef struct json_result {
-    token_t offender;
-    // TODO(yousef): later byte and line position in original file
-} json_result_t;
+enum agnes_res_kind {
+    RES_NONE = 0,
+    RES_LEXER_NONE = RES_NONE,
+    RES_PARSER_NONE = RES_NONE,
 
-static interner_t interner = {0};
-#define STRING_TABLE interner.string_table
+    RES_LEXER_SOME,
+    RES_LEXER_ERROR,
+
+    RES_PARSER_ERROR,
+    RES_PARSER_SOME,
+
+    RES_OUT_OF_SPACE = 0xFFFF,
+};
+
+typedef struct agnes_result {
+    enum agnes_res_kind kind;
+    size_t byte_pos;
+    size_t line;
+    union {
+        token_t fragment;
+        jvalue_kind_t jvalue;
+    };
+} agnes_result_t;
+
+typedef struct agnes_parser {
+    char const *filename;
+    u8 const *bytes;
+    size_t file_size;
+
+    token_t *tokens;
+    size_t max_tokens;
+
+    size_t *line_info;
+
+    u8 *string_pool;
+    size_t string_pool_size;
+} agnes_parser_t;
+
+// 'public' API
+static agnes_result_t parse_json(agnes_parser_t *agnes_parser);
+
+// implementation
+#if defined(AG_PARSER_IMPLEMENT)
 
 static enum token_type map_char[256] = {
     [':'] = T_COLON,         [','] = T_COMMA,      ['['] = T_LEFT_BRACKET,
     [']'] = T_RIGHT_BRACKET, ['{'] = T_LEFT_CURLY, ['}'] = T_RIGHT_CURLY,
 };
 
-u8 consume(lexer_t *lexer) {
+static u8 consume(lexer_t *lexer) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return '\0';
@@ -107,7 +135,7 @@ u8 consume(lexer_t *lexer) {
     return lexer->bytes[pos];
 }
 
-bool push_token(lexer_t *lexer, token_t t) {
+static bool push_token(lexer_t *lexer, token_t t) {
     size_t at = lexer->next_token;
     if (at + 1 <= lexer->max_tokens) {
         lexer->tokens[at] = t;
@@ -118,48 +146,11 @@ bool push_token(lexer_t *lexer, token_t t) {
     return false;
 }
 
-#define STR(src) intern_cstring(src)
-#define CSTR(src) (intern_cstring(src).at)
-
-#define SLICE(src, len) ((byte_slice){src, len})
-#define INTERN(slice) intern_string(slice)
-
-byte_slice intern_string(byte_slice source) {
-    u8 *base = interner.string_stack + interner.next_string;
-    size_t temp_next_string = interner.next_string;
-
-    size_t real_length = source.len + 1;
-    if (interner.next_string + real_length <= interner.stack_size) {
-        memcpy(base, source.at, source.len);
-        base[real_length - 1] = '\0';
-        interner.next_string += real_length;
-    } else {
-        panic("unable to allocate cstring");
-    }
-    byte_slice allocated = {base, real_length};
-    byte_slice slice;
-
-    if ((slice = shget(STRING_TABLE, allocated.at)).at != NULL) {
-        // string already stored: discard temp allocation
-        interner.next_string = temp_next_string;
-        return slice;
-    } else {
-        return shput(STRING_TABLE, allocated.at, allocated);
-    }
-}
-
-byte_slice intern_cstring(char const *string) {
-    byte_slice slice = (byte_slice){string, strlen(string)};
-    return intern_string(slice);
-}
-
-bool equals(byte_slice left, byte_slice right) { return left.at == right.at; }
-
 #define MATCH_CONSUME_ALPHANUMERIC(lexer) match_consume_ident_char(lexer, false)
 
 #define MATCH_CONSUME_IDENT_CHAR(lexer) match_consume_ident_char(lexer, true)
 
-bool match_consume_any_strchar(lexer_t *lexer) {
+static bool match_consume_any_strchar(lexer_t *lexer) {
     size_t pos;
     if ((pos = lexer->position) >= lexer->len) {
         return false;
@@ -172,7 +163,7 @@ bool match_consume_any_strchar(lexer_t *lexer) {
     return true;
 }
 
-bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
+static bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return false;
@@ -189,91 +180,11 @@ bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
     return false;
 }
 
-char const *format_jvalue(jvalue_type_t kind) {
-    switch (kind) {
-    case J_TRUE:
-        return CSTR("TRUE");
-    case J_FALSE:
-        return CSTR("FALSE");
-    case J_NULL:
-        return CSTR("NULL");
-
-    case J_ARRAY:
-        return CSTR("ARRAY[...]");
-
-    case J_OBJECT:
-        return CSTR("OBJ{...}");
-
-    case J_STRING:
-        return CSTR("STRING");
-
-    case J_NUMBER:
-        return CSTR("NUMBER");
-    }
-}
-
-char const *format_token(token_t t) {
-    switch (t.kind) {
-    case T_EOF:
-        return CSTR("EOF");
-    case T_NONE:
-        return CSTR("T_NONE");
-    case T_SIMPLE:
-        return CSTR("T_SIMPLE");
-    case T_LEFT_BRACKET:
-        return CSTR("LEFT_BRACKET");
-    case T_RIGHT_BRACKET:
-        return CSTR("RIGHT_BRACKET");
-    case T_LEFT_CURLY:
-        return CSTR("LEFT_CURLY");
-    case T_RIGHT_CURLY:
-        return CSTR("RIGHT_CURLY");
-    case T_COMMA:
-        return CSTR("COMMA");
-    case T_COLON:
-        return CSTR("COLON");
-    case T_TRUE:
-        return CSTR("TRUE");
-    case T_FALSE:
-        return CSTR("FALSE");
-    case T_NULL:
-        return CSTR("NULL");
-
-    case T_STRING_LIT: {
-        __fmt("STR_LIT(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_UNKNOWN: {
-        __fmt("UNKNOWN(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_UNTERMINATED_STRING_LIT: {
-        __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_NUMBER_LIT: {
-        __fmt("NUMBER(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-    }
-}
-
 #define MATCH_CONSUME_ZERO(lexer) match_consume_digit(lexer, '0', '0')
 #define MATCH_CONSUME_NONZERO(lexer) match_consume_digit(lexer, '1', '9')
 #define MATCH_CONSUME_ANY_DIGIT(lexer) match_consume_digit(lexer, '0', '9')
 
-bool match_consume_digit(lexer_t *lexer, u8 start, u8 end) {
+static bool match_consume_digit(lexer_t *lexer, u8 start, u8 end) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return false;
@@ -288,20 +199,9 @@ bool match_consume_digit(lexer_t *lexer, u8 start, u8 end) {
     return false;
 }
 
-typedef enum result {
-    RES_NONE = 0,
-    RES_LEXER_NONE = RES_NONE,
-    RES_PARSER_NONE = RES_NONE,
+#define LEXER_OUT_OF_SPACE ((agnes_result_t){RES_OUT_OF_SPACE})
 
-    RES_LEXER_SOME,
-    RES_LEXER_ERROR,
-
-    RES_OUT_OF_SPACE = 0xFFFF,
-} result_t;
-
-#define LEXER_OUT_OF_SPACE ((lexer_result_t){RES_OUT_OF_SPACE})
-
-result_t match_fraction(lexer_t *lexer) {
+static enum agnes_res_kind match_fraction(lexer_t *lexer) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return RES_LEXER_NONE;
@@ -323,7 +223,7 @@ result_t match_fraction(lexer_t *lexer) {
     return RES_LEXER_NONE;
 }
 
-result_t match_exponent(lexer_t *lexer) {
+static enum agnes_res_kind match_exponent(lexer_t *lexer) {
     size_t pos = lexer->position;
     if (pos >= lexer->len) {
         return RES_LEXER_NONE;
@@ -354,24 +254,17 @@ result_t match_exponent(lexer_t *lexer) {
     return RES_LEXER_NONE;
 }
 
-typedef struct lexer_result {
-    result_t kind;
-    size_t position;
-    size_t line;
-    token_t fragment;
-} lexer_result_t;
-
-lexer_result_t token_error(lexer_t *lexer, token_type_t token_kind) {
+static agnes_result_t token_error(lexer_t *lexer, token_type_t token_kind) {
     size_t len = lexer->position - lexer->begin_i;
     token_t t = {.kind = token_kind,
                  .byte_sequence =
                      INTERN(SLICE(lexer->bytes + lexer->begin_i, len))};
 
-    return (lexer_result_t){RES_LEXER_ERROR, lexer->begin_i,
+    return (agnes_result_t){RES_LEXER_ERROR, lexer->begin_i,
                             lexer->current_line, t};
 }
 
-lexer_result_t tokenize(lexer_t *lexer) {
+static agnes_result_t tokenize(lexer_t *lexer) {
     u8 c;
     size_t next_token = 0;
     size_t line_number = 1;
@@ -420,7 +313,7 @@ lexer_result_t tokenize(lexer_t *lexer) {
             byte_slice string =
                 INTERN(SLICE(lexer->bytes + lexer->begin_i, len));
 
-            if (equals(string, expect)) {
+            if (str_eq(string, expect)) {
                 if (!push_token(lexer, (token_t){expected_type,
                                                  .byte_sequence = expect})) {
                     return LEXER_OUT_OF_SPACE;
@@ -533,12 +426,12 @@ lexer_result_t tokenize(lexer_t *lexer) {
     if (!push_token(lexer, (token_t){.kind = T_EOF})) {
         return LEXER_OUT_OF_SPACE;
     }
-    return (lexer_result_t){
+    return (agnes_result_t){
         RES_LEXER_NONE,
     };
 }
 
-token_t peek_token(parser_t *parser) {
+static token_t peek_token(parser_t *parser) {
     assert(parser->tokens[parser->len - 1].kind == T_EOF);
 
     size_t pos = parser->position;
@@ -548,7 +441,7 @@ token_t peek_token(parser_t *parser) {
     return parser->tokens[pos];
 }
 
-bool consume_token(parser_t *parser, token_type_t expect) {
+static bool consume_token(parser_t *parser, token_type_t expect) {
     assert(parser->tokens[parser->len - 1].kind == T_EOF);
 
     size_t pos = parser->position;
@@ -562,9 +455,9 @@ bool consume_token(parser_t *parser, token_type_t expect) {
     return false;
 }
 
-void advance(parser_t *parser) { parser->position++; }
+static void advance(parser_t *parser) { parser->position++; }
 
-jvalue_type_t parse_value(parser_t *parser) {
+static jvalue_kind_t parse_value(parser_t *parser) {
     assert(parser->tokens[parser->len - 1].kind == T_EOF);
     token_t token = peek_token(parser);
     dbg("token: %s", format_token(token));
@@ -580,7 +473,7 @@ jvalue_type_t parse_value(parser_t *parser) {
                 return J_ERROR; // for now just exit function completely,
                                 // later do better error handling
             }
-            jvalue_type_t val = parse_value(parser);
+            jvalue_kind_t val = parse_value(parser);
             if (val == J_ERROR || val == J_NONE) {
                 return J_ERROR;
             }
@@ -651,95 +544,130 @@ jvalue_type_t parse_value(parser_t *parser) {
     }
 }
 
-jvalue_type_t parse(parser_t *parser) {
-    if (parser->len < 1) {
-        panic("file=%s: parser->len<1", parser->filename);
+static u8 *format_jvalue(jvalue_kind_t kind) {
+    switch (kind) {
+    case J_TRUE:
+        return CSTR("TRUE");
+    case J_FALSE:
+        return CSTR("FALSE");
+    case J_NULL:
+        return CSTR("NULL");
+
+    case J_ARRAY:
+        return CSTR("ARRAY[...]");
+
+    case J_OBJECT:
+        return CSTR("OBJ{...}");
+
+    case J_STRING:
+        return CSTR("STRING");
+
+    case J_NUMBER:
+        return CSTR("NUMBER");
     }
-    if (parser->tokens[0].kind == T_EOF) {
-        return J_NONE;
-    }
-    jvalue_type_t v = parse_value(parser);
-    if (!consume_token(parser, T_EOF)) {
-        return J_ERROR;
-    }
-    return v;
 }
 
-// MAYBE(yousef): hash table implementation.
-// TODO(yousef): public API.
-// TODO(yousef): testing.
-int main(int argc, char const *argv[]) {
-    dbg("sizeof token: %zu bytes", sizeof(token_t));
+static u8 *format_token(token_t t) {
+    switch (t.kind) {
+    case T_EOF:
+        return CSTR("EOF");
+    case T_NONE:
+        return CSTR("T_NONE");
+    case T_SIMPLE:
+        return CSTR("T_SIMPLE");
+    case T_LEFT_BRACKET:
+        return CSTR("LEFT_BRACKET");
+    case T_RIGHT_BRACKET:
+        return CSTR("RIGHT_BRACKET");
+    case T_LEFT_CURLY:
+        return CSTR("LEFT_CURLY");
+    case T_RIGHT_CURLY:
+        return CSTR("RIGHT_CURLY");
+    case T_COMMA:
+        return CSTR("COMMA");
+    case T_COLON:
+        return CSTR("COLON");
+    case T_TRUE:
+        return CSTR("TRUE");
+    case T_FALSE:
+        return CSTR("FALSE");
+    case T_NULL:
+        return CSTR("NULL");
 
-    // NOTE(yousef): arguments to main are validated somewhere else.
-    char const *filename = argv[1];
-    size_t max_file_size = MiB(600u);
+    case T_STRING_LIT: {
+        __fmt("STR_LIT(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
 
-    size_t pool_size = max_file_size + MiB(300u);
-    u8 *reserved_memory_pool;
-    if (!alloc_commit(pool_size, &reserved_memory_pool)) {
-        panic("unable to allocate required memory at start up");
+    case T_UNKNOWN: {
+        __fmt("UNKNOWN(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_UNTERMINATED_STRING_LIT: {
+        __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_NUMBER_LIT: {
+        __fmt("NUMBER(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
     }
+}
 
-    u8 *input_buffer = reserved_memory_pool;
-    size_t input_buffer_size = max_file_size;
-
-    u8 *token_buffer = reserved_memory_pool + input_buffer_size;
-    size_t token_buffer_size = MiB(40u);
-
-    u8 *string_pool = token_buffer + token_buffer_size;
-    size_t string_pool_size = MiB(100u);
-
-    interner.string_table = NULL;
-    interner.string_stack = string_pool;
-    interner.stack_size = string_pool_size;
-    interner.next_string = 0;
-
-    byte_slice file_data = {input_buffer, input_buffer_size};
-    read_file(filename, &file_data);
-
-    u8 *line_info_buffer = string_pool + string_pool_size;
-    size_t line_info_buffer_size =
-        (token_buffer_size / sizeof(token_t)) * sizeof(size_t);
-
+static agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
     lexer_t lexer = {
-        .filename = CSTR(filename),
-        .bytes = file_data.at,
-        .len = file_data.len,
+        .filename = agnes_parser->filename,
+        .bytes = agnes_parser->bytes,
+        .len = agnes_parser->file_size,
         .position = 0,
         .begin_i = 0,
-        .tokens = (token_t *)token_buffer,
-        .max_tokens = token_buffer_size / sizeof(token_t),
+        .tokens = agnes_parser->tokens,
+        .max_tokens = agnes_parser->max_tokens,
         .next_token = 0,
 
-        .line_info = (size_t *)line_info_buffer,
+        .line_info = agnes_parser->line_info,
         .current_line = 1,
     };
 
-    lexer_result_t res = tokenize(&lexer);
-    if (res.kind == RES_LEXER_ERROR) {
-        panic("failed: byte %d [line=%d], t=%s, file=%s", res.position,
-              res.line, format_token(res.fragment), lexer.filename);
-    }
-    size_t token_count = lexer.next_token;
-    token_t last = ((token_t *)token_buffer)[token_count - 1];
+    init_global_interner(agnes_parser->string_pool,
+                         agnes_parser->string_pool_size);
 
-    for (int i = 0; i < token_count; ++i) {
-        token_t e = ((token_t *)token_buffer)[i];
-        char *formatted = format_token(e);
-        dbg("tokens[%d]: %s", i, formatted);
+    agnes_result_t res = tokenize(&lexer);
+    if (res.kind == RES_LEXER_ERROR) {
+        return res;
     }
+
     parser_t parser = {.filename = lexer.filename,
-                       .tokens = token_buffer,
-                       .len = token_count,
+                       .tokens = lexer.tokens,
+                       .len = lexer.next_token,
                        .position = 0};
 
-    jvalue_type_t val = parse(&parser);
-
-    if (val != J_ERROR) {
-        assert(val != J_NONE);
-        return EXIT_SUCCESS;
+    // TODO(yousef): make this check more friendly
+    if (parser.len < 1) {
+        panic("file=%s: parser->len<1", parser.filename);
+    }
+    if (parser.tokens[0].kind == T_EOF) {
+        return (agnes_result_t){.kind = RES_PARSER_NONE};
     }
 
-    return EXIT_FAILURE;
+    jvalue_kind_t v = parse_value(&parser);
+
+    if (!consume_token(&parser, T_EOF) || v == J_ERROR) {
+        return (agnes_result_t){.kind = RES_PARSER_ERROR};
+    }
+
+    return (agnes_result_t){.kind = RES_PARSER_SOME, .jvalue = v};
 }
+
+#endif
+#endif

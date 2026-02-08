@@ -16,7 +16,7 @@ def build(with_build_log: bool):
     if not os.path.exists("build"):
         os.mkdir("build")
     
-    source_file = os.path.abspath("parser.c")
+    source_file = os.path.abspath("test.c")
     
     if os.name == "nt": 
         subprocess.run(["build.bat", VISUAL_STUDIO_AT, source_file], capture_output=(not with_build_log))

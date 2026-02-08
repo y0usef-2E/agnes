@@ -1,5 +1,5 @@
-#if !defined(AGNES_COMMON_H)
-#define AGNES_COMMON_H
+#if !defined(AG_COMMON_H)
+#define AG_COMMON_H
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
