@@ -48,6 +48,6 @@ int main(int argc, char const *argv[]) {
     if (result.kind == RES_PARSER_ERROR || result.kind == RES_LEXER_ERROR) {
         return EXIT_FAILURE;
     }
-
+    dbg("got: %s", format_jvalue(result.jvalue));
     return EXIT_SUCCESS;
 }

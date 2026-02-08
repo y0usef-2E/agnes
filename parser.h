@@ -121,6 +121,86 @@ static agnes_result_t parse_json(agnes_parser_t *agnes_parser);
 // implementation
 #if defined(AG_PARSER_IMPLEMENT)
 
+static u8 *format_jvalue(jvalue_kind_t kind) {
+    switch (kind) {
+    case J_TRUE:
+        return CSTR("TRUE");
+    case J_FALSE:
+        return CSTR("FALSE");
+    case J_NULL:
+        return CSTR("NULL");
+
+    case J_ARRAY:
+        return CSTR("ARRAY[...]");
+
+    case J_OBJECT:
+        return CSTR("OBJ{...}");
+
+    case J_STRING:
+        return CSTR("STRING");
+
+    case J_NUMBER:
+        return CSTR("NUMBER");
+    }
+}
+
+static u8 *format_token(token_t t) {
+    switch (t.kind) {
+    case T_EOF:
+        return CSTR("EOF");
+    case T_NONE:
+        return CSTR("T_NONE");
+    case T_SIMPLE:
+        return CSTR("T_SIMPLE");
+    case T_LEFT_BRACKET:
+        return CSTR("LEFT_BRACKET");
+    case T_RIGHT_BRACKET:
+        return CSTR("RIGHT_BRACKET");
+    case T_LEFT_CURLY:
+        return CSTR("LEFT_CURLY");
+    case T_RIGHT_CURLY:
+        return CSTR("RIGHT_CURLY");
+    case T_COMMA:
+        return CSTR("COMMA");
+    case T_COLON:
+        return CSTR("COLON");
+    case T_TRUE:
+        return CSTR("TRUE");
+    case T_FALSE:
+        return CSTR("FALSE");
+    case T_NULL:
+        return CSTR("NULL");
+
+    case T_STRING_LIT: {
+        __fmt("STR_LIT(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_UNKNOWN: {
+        __fmt("UNKNOWN(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_UNTERMINATED_STRING_LIT: {
+        __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+
+    case T_NUMBER_LIT: {
+        __fmt("NUMBER(%s)", t.byte_sequence.at);
+        return intern_string(
+                   (byte_slice){formatted_string, strlen(formatted_string)})
+            .at;
+    } break;
+    }
+}
+
 static enum token_type map_char[256] = {
     [':'] = T_COLON,         [','] = T_COMMA,      ['['] = T_LEFT_BRACKET,
     [']'] = T_RIGHT_BRACKET, ['{'] = T_LEFT_CURLY, ['}'] = T_RIGHT_CURLY,
@@ -460,7 +540,7 @@ static void advance(parser_t *parser) { parser->position++; }
 static jvalue_kind_t parse_value(parser_t *parser) {
     assert(parser->tokens[parser->len - 1].kind == T_EOF);
     token_t token = peek_token(parser);
-    dbg("token: %s", format_token(token));
+    // dbg("token: %s", format_token(token));
 
     switch (token.kind) {
     // obj
@@ -541,86 +621,6 @@ static jvalue_kind_t parse_value(parser_t *parser) {
 
     default:
         return J_NONE;
-    }
-}
-
-static u8 *format_jvalue(jvalue_kind_t kind) {
-    switch (kind) {
-    case J_TRUE:
-        return CSTR("TRUE");
-    case J_FALSE:
-        return CSTR("FALSE");
-    case J_NULL:
-        return CSTR("NULL");
-
-    case J_ARRAY:
-        return CSTR("ARRAY[...]");
-
-    case J_OBJECT:
-        return CSTR("OBJ{...}");
-
-    case J_STRING:
-        return CSTR("STRING");
-
-    case J_NUMBER:
-        return CSTR("NUMBER");
-    }
-}
-
-static u8 *format_token(token_t t) {
-    switch (t.kind) {
-    case T_EOF:
-        return CSTR("EOF");
-    case T_NONE:
-        return CSTR("T_NONE");
-    case T_SIMPLE:
-        return CSTR("T_SIMPLE");
-    case T_LEFT_BRACKET:
-        return CSTR("LEFT_BRACKET");
-    case T_RIGHT_BRACKET:
-        return CSTR("RIGHT_BRACKET");
-    case T_LEFT_CURLY:
-        return CSTR("LEFT_CURLY");
-    case T_RIGHT_CURLY:
-        return CSTR("RIGHT_CURLY");
-    case T_COMMA:
-        return CSTR("COMMA");
-    case T_COLON:
-        return CSTR("COLON");
-    case T_TRUE:
-        return CSTR("TRUE");
-    case T_FALSE:
-        return CSTR("FALSE");
-    case T_NULL:
-        return CSTR("NULL");
-
-    case T_STRING_LIT: {
-        __fmt("STR_LIT(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_UNKNOWN: {
-        __fmt("UNKNOWN(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_UNTERMINATED_STRING_LIT: {
-        __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
-
-    case T_NUMBER_LIT: {
-        __fmt("NUMBER(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
-    } break;
     }
 }
 

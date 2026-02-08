@@ -29,6 +29,7 @@ argparser = argparse.ArgumentParser(
 )
 
 argparser.add_argument("--restrict", type=str, default=None)
+argparser.add_argument("--top", type=str, default=None)
 
 args = argparser.parse_args()
 """
@@ -57,51 +58,62 @@ expect: list[bool] = []
 
 os.chdir("test_parsing")
 
-passing = Path("yes")
-for file in passing.iterdir():
-    assert file.is_file()
-    if args.restrict is not None: 
-        pref = "y_" + args.restrict 
-        if file.name.startswith(pref):
-            print(file)
+if args.top:
+    input = Path(args.top)
+    assert input.exists()
+    assert input.is_file() 
+    os.chdir("..")
+    build(True)
+    os.chdir("build")
+    proc = subprocess.run([exec, input.absolute()])
+    print("Got back: ", proc.returncode)
+
+else:
+    passing = Path("yes")
+    for file in passing.iterdir():
+        assert file.is_file()
+        if args.restrict is not None: 
+            pref = "y_" + args.restrict 
+            if file.name.startswith(pref):
+                print(file)
+                paths.append(file.absolute())
+                expect.append(True)    
+        else:
             paths.append(file.absolute())
-            expect.append(True)    
-    else:
-        paths.append(file.absolute())
-        expect.append(True)
+            expect.append(True)
 
-failing = Path("no")
-for file in failing.iterdir(): 
-    assert file.is_file()
-    if args.restrict is not None:
-        pref = "n_" + args.restrict 
-        if file.name.startswith(pref):
-            print(file)
+    failing = Path("no")
+    for file in failing.iterdir(): 
+        assert file.is_file()
+        if args.restrict is not None:
+            pref = "n_" + args.restrict 
+            if file.name.startswith(pref):
+                print(file)
+                paths.append(file.absolute())
+                expect.append(False)    
+        else:
             paths.append(file.absolute())
-            expect.append(False)    
-    else:
-        paths.append(file.absolute())
-        expect.append(False)
+            expect.append(False)
 
 
-os.chdir("..")
-build(True)
+    os.chdir("..")
+    build(True)
 
-import time
+    import time
 
-os.chdir("build")
-print(f"running {len(paths)} tests: MODE=", args.restrict if args.restrict else "ALL")
-with open(f"0_log_{time.time()}.csv", "w") as output_log:
-    for i in range (0, len(expect)):
-        proc = subprocess.run([exec, paths[i]])
-        result = "Fail"
-        if expect[i]==True and proc.returncode == 0:
-            result = "Pass"
-        elif expect[i] ==False and proc.returncode !=0:
-            result = "Pass"
+    os.chdir("build")
+    print(f"running {len(paths)} tests: MODE=", args.restrict if args.restrict else "ALL")
+    with open(f"0_log_{time.time()}.csv", "w") as output_log:
+        for i in range (0, len(expect)):
+            proc = subprocess.run([exec, paths[i]])
+            result = "Fail"
+            if expect[i]==True and proc.returncode == 0:
+                result = "Pass"
+            elif expect[i] ==False and proc.returncode !=0:
+                result = "Pass"
+            
+            simple_name = paths[i].name
+            output_log.write(f"{simple_name}, {result}\n")
+            
         
-        simple_name = paths[i].name
-        output_log.write(f"{simple_name}, {result}\n")
-        
-    
-os.chdir("..")
+    os.chdir("..")
