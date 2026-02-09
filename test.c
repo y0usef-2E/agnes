@@ -64,7 +64,6 @@ int main(int argc, char const *argv[]) {
 
     allocator_t string_allocator = {0};
     string_allocator.alloc = &stupid_alloc;
-    string_allocator.realloc = &stupid_realloc;
     string_allocator.free = &stupid_free;
 
     parser.string_allocator = string_allocator;
