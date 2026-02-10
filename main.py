@@ -30,6 +30,7 @@ argparser = argparse.ArgumentParser(
 
 argparser.add_argument("--restrict", type=str, default=None)
 argparser.add_argument("--top", type=str, default=None)
+argparser.add_argument("--build-only", type=str, default=False)
 
 args = argparser.parse_args()
 """
@@ -55,6 +56,10 @@ from pathlib import Path
 
 paths: list[Path] = []
 expect: list[bool] = []
+
+if args.build_only: 
+    build(True)
+    exit(0)
 
 os.chdir("test_parsing")
 

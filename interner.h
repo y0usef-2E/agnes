@@ -63,7 +63,7 @@ typedef struct string_interner {
 
 #define POOL_ARRAY_SIZE 10u
 
-#define HASH_SET_ENTRIES 8192
+#define HASH_SET_ENTRIES 8192 // never trigger a rebuild
 
 #define AG_INTERNER_OWN_TABLE 1
 
@@ -103,8 +103,6 @@ size_t stbds_hash_string(char *str, size_t seed) {
     return hash + seed;
 }
 
-#endif
-
 bool bytes_strict_eq(byte_slice left, byte_slice right) {
     if (left.len != right.len) {
         return false;
@@ -117,6 +115,93 @@ bool bytes_strict_eq(byte_slice left, byte_slice right) {
 
     return memcmp(left.at, right.at, left.len - 1) == 0;
 }
+
+static void rebuild_table() {
+    size_t old_cap = interner.hashset_cap;
+    set_entry_t *old_hashset = interner.hashset;
+    u8 *old_ctrl_bytes = interner.ctrl_bytes;
+
+    size_t new_cap = interner.hashset_cap = interner.hashset_cap * 4;
+
+    u8 *new_ctrl_bytes;
+    set_entry_t *new_hashset;
+
+    if (!interner.allocator.alloc(interner.hashset_cap * sizeof(set_entry_t),
+                                  &new_hashset)) {
+        panic("ran out of space while allocating string hashset");
+    }
+
+    if (!interner.allocator.alloc(interner.hashset_cap * sizeof(u8),
+                                  &new_ctrl_bytes)) {
+        panic("ran out of space while allocating string hashset");
+    }
+
+    memset(new_ctrl_bytes, kEmpty, new_cap * sizeof(u8));
+
+    for (size_t old_pos = 0; old_pos < old_cap; ++old_pos) {
+        if (old_ctrl_bytes[old_pos] != kEmpty) {
+            size_t hash = old_hashset[old_pos].hash;
+            size_t new_pos = hash % new_cap;
+            size_t new_lim =
+                new_pos == 0 ? (interner.hashset_cap - 1) : (new_pos - 1);
+
+            do {
+                if (new_ctrl_bytes[new_pos] == kEmpty) {
+                    new_ctrl_bytes[new_pos] = old_ctrl_bytes[old_pos];
+                    new_hashset[new_pos] = old_hashset[old_pos];
+                    break;
+                }
+
+                new_pos = (new_pos + 1) % new_cap;
+            } while (new_pos != new_lim);
+        }
+    }
+
+    interner.ctrl_bytes = new_ctrl_bytes;
+    interner.hashset = new_hashset;
+    interner.hashset_occ = interner.hashset_occ;
+
+    interner.allocator.free(old_ctrl_bytes);
+}
+
+byte_slice find_or_insert(byte_slice allocated, size_t revert) {
+    size_t hash = stbds_hash_string(allocated.at, interner.seed);
+    size_t pos = H1(hash) % interner.hashset_cap;
+    size_t start = pos;
+
+    do {
+        byte_slice candidate = interner.hashset[pos].rawptr;
+
+        bool cmp_res;
+
+        if (H2(hash) == interner.ctrl_bytes[pos] &&
+            hash == interner.hashset[pos].hash &&
+            (cmp_res = bytes_strict_eq(candidate, allocated))) {
+            // case 1, found:
+            interner.next_string = revert; // string already stored:
+                                           // discard temp allocation
+            return candidate;
+        }
+
+        if (interner.ctrl_bytes[pos] == kEmpty) {
+            interner.ctrl_bytes[pos] = H2(hash);
+            interner.hashset[pos] =
+                (set_entry_t){.hash = hash, .rawptr = allocated};
+            interner.hashset_occ += 1;
+
+            return allocated;
+        };
+
+        pos = (pos + 1) % interner.hashset_cap;
+        if (pos == start) {
+            break;
+        }
+    } while (true);
+
+    panic("unreachable codepath");
+}
+
+#endif
 
 byte_slice intern_string(byte_slice source) {
     if (interner.next_string == UINT64_MAX) {
@@ -182,83 +267,13 @@ byte_slice intern_string(byte_slice source) {
 
     byte_slice allocated = {base, real_length};
 #if AG_INTERNER_OWN_TABLE
+
     double upper_bound = ((double)interner.hashset_cap) * 0.75;
     if ((double)(interner.hashset_occ + 1) > upper_bound) {
-        // rebuild hash table:
-        size_t old_cap = interner.hashset_cap;
-        set_entry_t *old_hashset = interner.hashset;
-        u8 *old_ctrl_bytes = interner.ctrl_bytes;
-
-        size_t new_cap = interner.hashset_cap = interner.hashset_cap * 4;
-
-        u8 *new_ctrl_bytes;
-        set_entry_t *new_hashset;
-
-        if (!interner.allocator.alloc(
-                interner.hashset_cap * sizeof(set_entry_t), &new_hashset)) {
-            panic("ran out of space while allocating string hashset");
-        }
-
-        if (!interner.allocator.alloc(interner.hashset_cap * sizeof(u8),
-                                      &new_ctrl_bytes)) {
-            panic("ran out of space while allocating string hashset");
-        }
-
-        memset(new_ctrl_bytes, kEmpty, new_cap * sizeof(u8));
-
-        for (size_t old_pos = 0; old_pos < old_cap; ++old_pos) {
-            if (old_ctrl_bytes[old_pos] != kEmpty) {
-                size_t hash = old_hashset[old_pos].hash;
-                size_t new_pos = hash % new_cap;
-                size_t new_lim =
-                    new_pos == 0 ? (interner.hashset_cap - 1) : (new_pos - 1);
-
-                do {
-                    if (new_ctrl_bytes[new_pos] == kEmpty) {
-                        new_ctrl_bytes[new_pos] = old_ctrl_bytes[old_pos];
-                        new_hashset[new_pos] = old_hashset[old_pos];
-                    }
-
-                    new_pos = (new_pos + 1) % new_cap;
-                } while (new_pos != new_lim);
-            }
-        }
-
-        interner.ctrl_bytes = new_ctrl_bytes;
-        interner.hashset = new_hashset;
-        interner.hashset_occ = interner.hashset_occ;
+        rebuild_table();
     }
 
-    size_t hash = stbds_hash_string(allocated.at, interner.seed);
-    size_t pos = H1(hash) % interner.hashset_cap;
-    size_t limit_incl = pos == 0 ? (interner.hashset_cap - 1) : (pos - 1);
-
-    do {
-        byte_slice candidate = interner.hashset[pos].rawptr;
-
-        bool cmp_res;
-
-        if (H2(hash) == interner.ctrl_bytes[pos] &&
-            hash == interner.hashset[pos].hash &&
-            (cmp_res = bytes_strict_eq(candidate, allocated))) {
-            // case 1, found:
-            interner.next_string = temp_next_string; // string already stored:
-                                                     // discard temp allocation
-            return candidate;
-        }
-
-        if (interner.ctrl_bytes[pos] == kEmpty) {
-            interner.ctrl_bytes[pos] = H2(hash);
-            interner.hashset[pos] =
-                (set_entry_t){.hash = hash, .rawptr = allocated};
-            interner.hashset_occ += 1;
-
-            return allocated;
-        };
-
-        pos = (pos + 1) % interner.hashset_cap;
-    } while (pos != limit_incl);
-
+    return find_or_insert(allocated, temp_next_string);
 #else
     byte_slice slice;
 

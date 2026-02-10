@@ -349,6 +349,7 @@ static agnes_result_t tokenize(lexer_t *lexer) {
     size_t line_number = 1;
 
     while (lexer->position < lexer->len) {
+        // dbg("pos: %d", lexer->position);
         c = consume(lexer);
         lexer->begin_i = lexer->position - 1;
 
