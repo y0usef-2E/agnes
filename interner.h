@@ -2,9 +2,6 @@
 #define AG_INTERNER_H
 #include "common.h"
 
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
-
 /*
 Let's try this:
 1) For the backing string pool, if a string is allocated,
@@ -18,11 +15,36 @@ it is assumed that any pointer within the address space of any of the pools, is
 one that represents an exact string previously allocated by the interner, and
 not any range of bytes within such a pool.
 */
+
+typedef struct string_set_entry {
+    size_t hash;
+    byte_slice rawptr;
+} set_entry_t;
+
+typedef enum ctrl_byte {
+    kEmpty = 0x80,
+    kDeleted = 0xFEu,
+
+    // kUsed = 0x0xxx_xxxx
+} ctrl_byte_t;
+
+size_t H1(size_t hash) { return hash >> 7; }
+ctrl_byte_t H2(size_t hash) { return hash & 0x7F; }
+
 typedef struct string_interner {
-    struct {
-        char *key;
-        byte_slice value;
-    } *string_table;
+    union {
+        struct {
+            char *key;
+            byte_slice value;
+        } *string_table;
+
+        struct {
+            set_entry_t *hash_set;
+            u8 *ctrl_bytes;
+
+            size_t hashset_size;
+        };
+    };
 
     u8 *current_pool;
     size_t next_string;
@@ -34,61 +56,84 @@ typedef struct string_interner {
     size_t max_pools;
 
     allocator_t allocator;
+
+    size_t seed;
 } interner_t;
+
+#define POOL_ARRAY_SIZE 10u
+
+#define HASH_SET_ENTRIES 8192
+
+#define AG_INTERNER_OWN_TABLE 1
 
 #if defined(AG_INTERNER_IMPLEMENT)
 static interner_t interner = {.next_string = UINT64_MAX};
 
-bool in_table(byte_slice slice) {}
+#if !AG_INTERNER_OWN_TABLE
 
-#define POOL_ARRAY_SIZE 10u
+#define STB_DS_IMPLEMENTATION
+#include "stb_ds.h"
 
-bool init_global_interner(allocator_t allocator, size_t init_size) {
-    u8 *buffer;
-    if (allocator.alloc == NULL || !allocator.alloc(init_size, &buffer)) {
-        return false;
-    }
+#else
+#include <time.h>
 
-    u8 *pools;
-    if (!allocator.alloc(POOL_ARRAY_SIZE * sizeof(u8 *), &pools)) {
-        return false;
-    }
+// from: stb_ds.h
+#define STBDS_SIZE_T_BITS ((sizeof(size_t)) * 8)
 
-    u8 *pool_sizes;
-    if (!allocator.alloc(POOL_ARRAY_SIZE * sizeof(size_t), &pool_sizes)) {
-        return false;
-    }
+#define STBDS_ROTATE_LEFT(val, n)                                              \
+    (((val) << (n)) | ((val) >> (STBDS_SIZE_T_BITS - (n))))
+#define STBDS_ROTATE_RIGHT(val, n)                                             \
+    (((val) >> (n)) | ((val) << (STBDS_SIZE_T_BITS - (n))))
 
-    interner.max_pools = POOL_ARRAY_SIZE;
+// assumes strings are null-terminated
+size_t stbds_hash_string(char *str, size_t seed) {
+    size_t hash = seed;
+    while (*str)
+        hash = STBDS_ROTATE_LEFT(hash, 9) + (unsigned char)*str++;
 
-    interner.string_table = NULL;
-
-    interner.current_pool = buffer;
-    interner.current_pool_size = init_size;
-    interner.next_string = 0;
-
-    interner.pools = (u8 **)pools;
-
-    interner.pool_sizes = (u8 **)pool_sizes;
-
-    interner.pool_at = 0;
-    interner.pools[interner.pool_at] = interner.current_pool;
-    interner.pool_sizes[interner.pool_at] = interner.current_pool_size;
-
-    interner.allocator = allocator;
+    // Thomas Wang 64-to-32 bit mix function, hopefully also works in 32 bits
+    hash ^= seed;
+    hash = (~hash) + (hash << 18);
+    hash ^= hash ^ STBDS_ROTATE_RIGHT(hash, 31);
+    hash = hash * 21;
+    hash ^= hash ^ STBDS_ROTATE_RIGHT(hash, 11);
+    hash += (hash << 6);
+    hash ^= STBDS_ROTATE_RIGHT(hash, 22);
+    return hash + seed;
 }
 
-#define STR(src) intern_cstring(src)
-#define CSTR(src) (intern_cstring(src).at)
+#endif
 
-#define SLICE(src, len) ((byte_slice){src, len})
-#define INTERN(slice) intern_string(slice)
+bool bytes_strict_eq(byte_slice left, byte_slice right) {
+    if (left.len != right.len) {
+        return false;
+    }
+
+    // legal access always (since I append null-terminator to all strings)
+    if (left.at[0] != right.at[0]) {
+        return false;
+    }
+
+    return memcmp(left.at, right.at, left.len);
+}
 
 byte_slice intern_string(byte_slice source) {
     if (interner.next_string == UINT64_MAX) {
         panic("global string interner uninitialised");
     }
+#if AG_INTERNER_OWN_TABLE
+    u8 *pool;
+    size_t pool_size;
 
+    for (int i = 0; i <= interner.pool_at; ++i) {
+        pool = interner.pools[i];
+        pool_size = interner.pool_sizes[i];
+
+        if (source.at >= pool && source.at < pool + pool_size) {
+            return source;
+        }
+    }
+#endif
     u8 *base = interner.current_pool + interner.next_string;
     size_t temp_next_string = interner.next_string;
 
@@ -135,6 +180,33 @@ byte_slice intern_string(byte_slice source) {
     interner.next_string += real_length;
 
     byte_slice allocated = {base, real_length};
+#if AG_INTERNER_OWN_TABLE
+    size_t hash = stbds_hash_string(allocated.at, interner.seed);
+    size_t pos = H1(hash) % interner.hashset_size;
+    size_t limit_incl = pos == 0 ? (interner.hash_set - 1) : (pos - 1);
+
+    for (size_t i = pos; i <= limit_incl; ++i) {
+        byte_slice candidate = interner.hash_set[i].rawptr;
+        if (H2(hash) == interner.ctrl_bytes[i] &&
+            hash == interner.hash_set[i].hash &&
+            bytes_strict_eq(candidate, source)) {
+            // string already stored: discard temp allocation
+            interner.next_string = temp_next_string;
+            return candidate;
+        }
+
+        if (interner.ctrl_bytes[i] == kEmpty) {
+            interner.ctrl_bytes[i] = H2(hash);
+            interner.hash_set[i] =
+                (set_entry_t){.hash = hash, .rawptr = allocated};
+        }
+    }
+
+    // key not found and not empty slot found
+    // (unreachable because this is handled elsewhere)
+    panic("unreachable codepath");
+
+#else
     byte_slice slice;
 
     if ((slice = shget(interner.string_table, allocated.at)).at != NULL) {
@@ -144,7 +216,68 @@ byte_slice intern_string(byte_slice source) {
     } else {
         return shput(interner.string_table, allocated.at, allocated);
     }
+#endif
 }
+
+bool init_global_interner(allocator_t allocator, size_t init_size) {
+    u8 *buffer;
+    if (allocator.alloc == NULL || !allocator.alloc(init_size, &buffer)) {
+        return false;
+    }
+
+    u8 *pools;
+    if (!allocator.alloc(POOL_ARRAY_SIZE * sizeof(u8 *), &pools)) {
+        return false;
+    }
+
+    u8 *pool_sizes;
+    if (!allocator.alloc(POOL_ARRAY_SIZE * sizeof(size_t), &pool_sizes)) {
+        return false;
+    }
+
+    interner.max_pools = POOL_ARRAY_SIZE;
+
+    interner.string_table = NULL;
+
+    interner.current_pool = buffer;
+    interner.current_pool_size = init_size;
+    interner.next_string = 0;
+
+    interner.pools = (u8 **)pools;
+
+    interner.pool_sizes = (u8 **)pool_sizes;
+
+    interner.pool_at = 0;
+    interner.pools[interner.pool_at] = interner.current_pool;
+    interner.pool_sizes[interner.pool_at] = interner.current_pool_size;
+
+    interner.allocator = allocator;
+    time_t temp_time;
+    time(&temp_time);
+    interner.seed = *(size_t *)&temp_time;
+
+#if AG_INTERNER_OWN_TABLE
+    set_entry_t *string_set;
+    u8 *ctrl_bytes;
+
+    size_t buffer_size = HASH_SET_ENTRIES * (sizeof(set_entry_t) + sizeof(u8));
+
+    if (!allocator.alloc(buffer_size, &ctrl_bytes)) {
+        return false;
+    }
+
+    string_set = ctrl_bytes + HASH_SET_ENTRIES * sizeof(u8);
+
+    interner.hash_set = string_set;
+    interner.ctrl_bytes = ctrl_bytes;
+#endif
+}
+
+#define STR(src) intern_cstring(src)
+#define CSTR(src) (intern_cstring(src).at)
+
+#define SLICE(src, len) ((byte_slice){src, len})
+#define INTERN(slice) intern_string(slice)
 
 byte_slice intern_cstring(char const *string) {
     byte_slice slice = (byte_slice){string, strlen(string)};

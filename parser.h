@@ -623,7 +623,7 @@ static jvalue_kind_t parse_value(parser_t *parser) {
     }
 }
 
-static agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
+agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
     lexer_t lexer = {
         .filename = agnes_parser->filename,
         .bytes = agnes_parser->bytes,
