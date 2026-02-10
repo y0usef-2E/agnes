@@ -63,22 +63,20 @@ typedef struct string_interner {
 
 #define POOL_ARRAY_SIZE 10u
 
-#define HASH_SET_ENTRIES 8192 // never trigger a rebuild
-
-#define AG_INTERNER_OWN_TABLE 1
+#define HASH_SET_ENTRIES 8192
 
 #if defined(AG_INTERNER_IMPLEMENT)
 static interner_t interner = {.next_string = UINT64_MAX};
 
-#if !AG_INTERNER_OWN_TABLE
-
-#define STB_DS_IMPLEMENTATION
-#include "stb_ds.h"
-
-#else
 #include <time.h>
 
-// from: stb_ds.h
+/**********************
+stb_ds.h - v0.67 - public domain data structures - Sean Barrett 2019
+https://github.com/nothings/stb
+https://nothings.org/stb_ds
+
+Credit to Sean Barrett for hashing routine.
+*/
 #define STBDS_SIZE_T_BITS ((sizeof(size_t)) * 8)
 
 #define STBDS_ROTATE_LEFT(val, n)                                              \
@@ -102,6 +100,9 @@ size_t stbds_hash_string(char *str, size_t seed) {
     hash ^= STBDS_ROTATE_RIGHT(hash, 22);
     return hash + seed;
 }
+
+/*
+**********************/
 
 bool bytes_strict_eq(byte_slice left, byte_slice right) {
     if (left.len != right.len) {
@@ -201,13 +202,10 @@ byte_slice find_or_insert(byte_slice allocated, size_t revert) {
     panic("unreachable codepath");
 }
 
-#endif
-
 byte_slice intern_string(byte_slice source) {
     if (interner.next_string == UINT64_MAX) {
         panic("global string interner uninitialised");
     }
-#if AG_INTERNER_OWN_TABLE
     u8 *pool;
     size_t pool_size;
 
@@ -219,7 +217,6 @@ byte_slice intern_string(byte_slice source) {
             return source;
         }
     }
-#endif
     u8 *base = interner.current_pool + interner.next_string;
     size_t temp_next_string = interner.next_string;
 
@@ -227,7 +224,7 @@ byte_slice intern_string(byte_slice source) {
     if (interner.next_string + real_length > interner.current_pool_size) {
         // make new pool
         size_t min = real_length;
-        size_t hint = interner.current_pool_size;
+        size_t hint = interner.current_pool_size * 2;
 
         u8 *new_buf;
         size_t buf_size;
@@ -266,7 +263,6 @@ byte_slice intern_string(byte_slice source) {
     interner.next_string += real_length;
 
     byte_slice allocated = {base, real_length};
-#if AG_INTERNER_OWN_TABLE
 
     double upper_bound = ((double)interner.hashset_cap) * 0.75;
     if ((double)(interner.hashset_occ + 1) > upper_bound) {
@@ -274,17 +270,6 @@ byte_slice intern_string(byte_slice source) {
     }
 
     return find_or_insert(allocated, temp_next_string);
-#else
-    byte_slice slice;
-
-    if ((slice = shget(interner.string_table, allocated.at)).at != NULL) {
-        // string already stored: discard temp allocation
-        interner.next_string = temp_next_string;
-        return slice;
-    } else {
-        return shput(interner.string_table, allocated.at, allocated);
-    }
-#endif
 }
 
 bool init_global_interner(allocator_t allocator, size_t init_size) {
@@ -323,7 +308,6 @@ bool init_global_interner(allocator_t allocator, size_t init_size) {
     time(&temp_time);
     interner.seed = *(size_t *)&temp_time;
 
-#if AG_INTERNER_OWN_TABLE
     set_entry_t *string_set;
     u8 *ctrl_bytes;
 
@@ -341,7 +325,7 @@ bool init_global_interner(allocator_t allocator, size_t init_size) {
 
     interner.hashset = string_set;
     interner.ctrl_bytes = ctrl_bytes;
-#endif
+
     // success
     interner.next_string = 0;
 }
@@ -360,5 +344,4 @@ byte_slice intern_cstring(char const *string) {
 bool str_eq(byte_slice left, byte_slice right) { return left.at == right.at; }
 
 #endif
-
 #endif
