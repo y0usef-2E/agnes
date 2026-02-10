@@ -75,9 +75,11 @@ int main(int argc, char const *argv[]) {
 #endif
     agnes_result_t result = parse_json(&parser);
 
-    if (result.kind == RES_PARSER_ERROR || result.kind == RES_LEXER_ERROR) {
+    if (result.kind == RES_PARSER_ERROR || result.kind == RES_LEXER_ERROR ||
+        result.kind == RES_OUT_OF_SPACE) {
         return EXIT_FAILURE;
     }
+
     dbg("got: %s", format_jvalue(result.jvalue));
 
 #if defined(_WIN32)

@@ -115,7 +115,7 @@ bool bytes_strict_eq(byte_slice left, byte_slice right) {
         return false;
     }
 
-    return memcmp(left.at, right.at, left.len);
+    return memcmp(left.at, right.at, left.len - 1) == 0;
 }
 
 byte_slice intern_string(byte_slice source) {
@@ -150,7 +150,7 @@ byte_slice intern_string(byte_slice source) {
         for (size_t k = hint;; k = k / 2) {
 
             if (k < min) {
-                panic("ran out of space while allocating string");
+                panic("ran out of space while allocating string pool");
             }
 
             if (interner.allocator.alloc(k, &new_buf)) {
@@ -211,14 +211,16 @@ byte_slice intern_string(byte_slice source) {
                 size_t hash = old_hashset[old_pos].hash;
                 size_t new_pos = hash % new_cap;
                 size_t new_lim =
-                    new_pos == 0 ? (interner.hashset - 1) : (new_pos - 1);
+                    new_pos == 0 ? (interner.hashset_cap - 1) : (new_pos - 1);
 
-                for (; new_pos != new_lim; new_pos = (new_pos + 1) % new_cap) {
+                do {
                     if (new_ctrl_bytes[new_pos] == kEmpty) {
                         new_ctrl_bytes[new_pos] = old_ctrl_bytes[old_pos];
                         new_hashset[new_pos] = old_hashset[old_pos];
                     }
-                }
+
+                    new_pos = (new_pos + 1) % new_cap;
+                } while (new_pos != new_lim);
             }
         }
 
@@ -229,32 +231,33 @@ byte_slice intern_string(byte_slice source) {
 
     size_t hash = stbds_hash_string(allocated.at, interner.seed);
     size_t pos = H1(hash) % interner.hashset_cap;
-    size_t limit_incl = pos == 0 ? (interner.hashset - 1) : (pos - 1);
+    size_t limit_incl = pos == 0 ? (interner.hashset_cap - 1) : (pos - 1);
 
-    for (size_t i = pos; i <= limit_incl; i = (i + 1) % interner.hashset_cap) {
-        byte_slice candidate = interner.hashset[i].rawptr;
-        if (H2(hash) == interner.ctrl_bytes[i] &&
-            hash == interner.hashset[i].hash &&
-            bytes_strict_eq(candidate, source)) {
+    do {
+        byte_slice candidate = interner.hashset[pos].rawptr;
+
+        bool cmp_res;
+
+        if (H2(hash) == interner.ctrl_bytes[pos] &&
+            hash == interner.hashset[pos].hash &&
+            (cmp_res = bytes_strict_eq(candidate, allocated))) {
             // case 1, found:
             interner.next_string = temp_next_string; // string already stored:
                                                      // discard temp allocation
             return candidate;
         }
 
-        if (interner.ctrl_bytes[i] == kEmpty) {
-            interner.ctrl_bytes[i] = H2(hash);
-            interner.hashset[i] =
+        if (interner.ctrl_bytes[pos] == kEmpty) {
+            interner.ctrl_bytes[pos] = H2(hash);
+            interner.hashset[pos] =
                 (set_entry_t){.hash = hash, .rawptr = allocated};
             interner.hashset_occ += 1;
 
             return allocated;
-        }
+        };
 
-        // key not found and no empty slot found:
-        // (unreachable because this is handled elsewhere)
-        panic("unreachable codepath");
-    }
+        pos = (pos + 1) % interner.hashset_cap;
+    } while (pos != limit_incl);
 
 #else
     byte_slice slice;

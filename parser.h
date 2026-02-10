@@ -4,9 +4,6 @@
 #include "common.h"
 #include <assert.h>
 
-#define AG_INTERNER_IMPLEMENT
-#include "interner.h"
-
 typedef enum token_type {
     T_NONE = 0u,
     T_SIMPLE = 0x8000u,
@@ -119,6 +116,9 @@ static agnes_result_t parse_json(agnes_parser_t *agnes_parser);
 
 // implementation
 #if defined(AG_PARSER_IMPLEMENT)
+
+#define AG_INTERNER_IMPLEMENT
+#include "interner.h"
 
 static u8 *format_jvalue(jvalue_kind_t kind) {
     switch (kind) {
@@ -623,6 +623,8 @@ static jvalue_kind_t parse_value(parser_t *parser) {
     }
 }
 
+#define ATLEAST_PAGE(n) (n < KiB(4) ? KiB(4) : n)
+
 agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
     lexer_t lexer = {
         .filename = agnes_parser->filename,
@@ -639,7 +641,7 @@ agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
     };
 
     init_global_interner(agnes_parser->string_allocator,
-                         (agnes_parser->file_size / 4));
+                         ATLEAST_PAGE(agnes_parser->file_size));
 
     agnes_result_t res = tokenize(&lexer);
     if (res.kind == RES_LEXER_ERROR || res.kind == RES_OUT_OF_SPACE) {
