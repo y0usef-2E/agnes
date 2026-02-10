@@ -183,7 +183,7 @@ byte_slice intern_string(byte_slice source) {
     byte_slice allocated = {base, real_length};
 #if AG_INTERNER_OWN_TABLE
     double upper_bound = ((double)interner.hashset_cap) * 0.75;
-    if ((double)(interner.hashset_occ + 1) < upper_bound) {
+    if ((double)(interner.hashset_occ + 1) > upper_bound) {
         // rebuild hash table:
         size_t old_cap = interner.hashset_cap;
         set_entry_t *old_hashset = interner.hashset;
