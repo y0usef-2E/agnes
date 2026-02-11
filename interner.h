@@ -113,7 +113,6 @@ bool bytes_strict_eq(byte_slice left, byte_slice right) {
     if (left.at[0] != right.at[0]) {
         return false;
     }
-
     return memcmp(left.at, right.at, left.len - 1) == 0;
 }
 
