@@ -1,0 +1,6 @@
+common.h
+interner.h
+parser.h
+
+include_as_head.exe
+include_as_head.out
