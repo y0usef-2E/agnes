@@ -120,6 +120,19 @@ static agnes_result_t parse_json(agnes_parser_t *agnes_parser);
 #define AG_INTERNER_IMPLEMENT
 #include "interner.h"
 
+interner_t global_string_interner = {0};
+
+#define STR(src) intern_cstring(&global_string_interner, src)
+#define CSTR(src) (STR(src).at)
+
+#define SLICE(src, len) ((byte_slice){src, len})
+#define INTERN(slice) intern_string(&global_string_interner, slice)
+
+byte_slice intern_cstring(interner_t *interner, char const *string) {
+    byte_slice slice = (byte_slice){string, strlen(string)};
+    return intern_string(interner, slice);
+}
+
 static u8 *format_jvalue(jvalue_kind_t kind) {
     switch (kind) {
     case J_TRUE:
@@ -172,30 +185,22 @@ static u8 *format_token(token_t t) {
 
     case T_STRING_LIT: {
         __fmt("STR_LIT(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
+        return CSTR(formatted_string);
     } break;
 
     case T_UNKNOWN: {
         __fmt("UNKNOWN(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
+        return CSTR(formatted_string);
     } break;
 
     case T_UNTERMINATED_STRING_LIT: {
         __fmt("UNTERMINATED_STR(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
+        return CSTR(formatted_string);
     } break;
 
     case T_NUMBER_LIT: {
         __fmt("NUMBER(%s)", t.byte_sequence.at);
-        return intern_string(
-                   (byte_slice){formatted_string, strlen(formatted_string)})
-            .at;
+        return CSTR(formatted_string);
     } break;
     }
 }
@@ -641,7 +646,8 @@ agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
         .current_line = 1,
     };
 
-    init_global_interner(agnes_parser->string_allocator,
+    init_global_interner(&global_string_interner,
+                         agnes_parser->string_allocator,
                          ATLEAST_PAGE(agnes_parser->file_size));
 
     agnes_result_t res = tokenize(&lexer);
