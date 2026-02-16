@@ -15,10 +15,21 @@ bool stupid_alloc(size_t size, u8 **out) {
 
 void stupid_free(u8 *in) { free(in); }
 
+// arguments: [1]: filename, [2]: filesize (validated by test.py)
 int main(int argc, char const *argv[]) {
+    if (argc < 3) {
+        panic("insufficient command line arguments");
+    }
+
     char const *filename = argv[1];
+    size_t file_size = atoi(argv[2]);
+
     size_t pool_size = MiB(1000);
     size_t max_file_size = MiB(400);
+
+    if (file_size > max_file_size) {
+        panic("input file too big");
+    }
 
     u8 *reserved_memory_pool;
 
@@ -26,13 +37,12 @@ int main(int argc, char const *argv[]) {
         panic("unable to allocate required memory at start up");
     }
 
-    u8 const json_data[] = "{\"name\": \"Saint-Exupery\"}";
-
-    memcpy(reserved_memory_pool, json_data, sizeof(json_data));
+    FILE *handle = fopen(filename, "r");
+    fread(reserved_memory_pool, 1, file_size, handle);
 
     agnes_parser_t parser = {0};
     parser.bytes = reserved_memory_pool;
-    parser.file_size = sizeof(json_data);
+    parser.file_size = file_size;
     parser.filename = filename;
     parser.max_tokens = max_file_size / sizeof(token_t);
 

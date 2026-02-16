@@ -267,6 +267,7 @@ byte_slice intern_string(interner_t *interner, byte_slice source) {
 
 bool init_global_interner(interner_t *interner, allocator_t allocator,
                           size_t init_string_pool_size) {
+    interner->next_string = UINT64_MAX;
 
     u8 *buffer;
     if (allocator.alloc == NULL ||
@@ -322,6 +323,7 @@ bool init_global_interner(interner_t *interner, allocator_t allocator,
 
     // success
     interner->next_string = 0;
+    return true;
 }
 
 void free_and_invalidate(interner_t *interner) {

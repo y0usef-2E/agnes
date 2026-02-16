@@ -120,7 +120,7 @@ static agnes_result_t parse_json(agnes_parser_t *agnes_parser);
 #define AG_INTERNER_IMPLEMENT
 #include "interner.h"
 
-interner_t global_string_interner = {0};
+interner_t global_string_interner = {.next_string = UINT64_MAX};
 
 #define STR(src) intern_cstring(&global_string_interner, src)
 #define CSTR(src) (STR(src).at)
@@ -370,7 +370,7 @@ static agnes_result_t tokenize(lexer_t *lexer) {
             return token_error(lexer, T_NUMBER_LIT);
 
         case '\0':
-            return token_error(lexer, T_UNKNOWN);
+            goto clean_return;
 
         case '\n':
             lexer->current_line++;
@@ -507,7 +507,7 @@ static agnes_result_t tokenize(lexer_t *lexer) {
         } break;
         }
     }
-
+clean_return:
     if (!push_token(lexer, (token_t){.kind = T_EOF})) {
         return LEXER_OUT_OF_SPACE;
     }
@@ -646,9 +646,11 @@ agnes_result_t parse_json(agnes_parser_t *agnes_parser) {
         .current_line = 1,
     };
 
-    init_global_interner(&global_string_interner,
-                         agnes_parser->string_allocator,
-                         ATLEAST_PAGE(agnes_parser->file_size));
+    bool result = init_global_interner(&global_string_interner,
+                                       agnes_parser->string_allocator,
+                                       ATLEAST_PAGE(agnes_parser->file_size));
+
+    assert(global_string_interner.next_string != UINT64_MAX && result);
 
     agnes_result_t res = tokenize(&lexer);
     if (res.kind == RES_LEXER_ERROR || res.kind == RES_OUT_OF_SPACE) {
