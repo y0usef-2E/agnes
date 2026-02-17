@@ -37,3 +37,43 @@ For a better understanding of the usage, read the contents of `include_as_head.c
 You can build and run it using `run.py`.
 
 # The String Interner
+### Motivation
+At the risk of stating the obvious, the interner's job is to eliminate redundancy in the data while stored in RAM.
+The simplest example is this:
+```json
+// this is common enough
+[
+    {  
+        "Name": "Fabienne",
+        "DateOfBirth": "2001-08-25",
+        "Description": "Persona non grata"
+    },
+    {  
+        "Name": "Lucius Domitius Aurelianus",
+        "DateOfBirth": "214-09-09",
+        "Description": "Restitutor Orbis"
+    },
+    .
+    .
+    .
+    {
+        "Name": "Miguel Angel Asturias",
+        "DateOfBirth": "1899-10-19",
+        "Description": "Poet-diplomat"
+    }
+]
+```
+If, while processing, we stored each string in the original file individually and treated them as unique, then we'd have N copies of "Name", of "DateOfBirth", and of "Description" in memory. Clearly, there is no need to store them seperately to parse or validate this data correctly.
+
+The interner's job is to deduplicate such strings in the input data. Instead of storing the whole string again, a node referring to it gets a pointer an equivalent string stored earlier.
+
+This is achieved via hashing which also means that parsing is computationally more intensive because each string encountered will go through a hashing cycle (which will trigger a byte-by-byte string comparison if the string is already stored or if two hashes collide).
+
+However, I assert that, with conventional input data, the benefit of interning outweigh the cost of the extra steps taken for hashing. Furthermore, it makes manipulation of the data and comparison of strings easier.
+
+This is how data would be representated in memory (slightly simplified):
+<img src="static/interner1.png">
+
+The upper rectangle shows how strings are stored. The interner, using the allocation routines provided, reserves a linear chunk of memory and uses it like a stack. If it encounters a new string, it pushes it on top. If a string has already been encountered before, a pointer within that same stack is returned.
+(In the picture, the stack top is to the right.)
+
