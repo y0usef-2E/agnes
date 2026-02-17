@@ -37,11 +37,10 @@ For a better understanding of the usage, read the contents of `include_as_head.c
 You can build and run it using `run.py`.
 
 # The String Interner
-### Motivation
+### Motivation for Interning
 At the risk of stating the obvious, the interner's job is to eliminate redundancy in the data while stored in RAM.
-The simplest example is this:
+The simplest example is this (which I presume is common enough):
 ```json
-// this is common enough
 [
     {  
         "Name": "Fabienne",
@@ -53,9 +52,6 @@ The simplest example is this:
         "DateOfBirth": "214-09-09",
         "Description": "Restitutor Orbis"
     },
-    .
-    .
-    .
     {
         "Name": "Miguel Angel Asturias",
         "DateOfBirth": "1899-10-19",
@@ -72,8 +68,26 @@ This is achieved via hashing which also means that parsing is computationally mo
 However, I assert that, with conventional input data, the benefit of interning outweigh the cost of the extra steps taken for hashing. Furthermore, it makes manipulation of the data and comparison of strings easier.
 
 This is how data would be representated in memory (slightly simplified):
-<img src="static/interner1.png">
+<img src="static/interner1.png" width="70%" height="70%">
 
-The upper rectangle shows how strings are stored. The interner, using the allocation routines provided, reserves a linear chunk of memory and uses it like a stack. If it encounters a new string, it pushes it on top. If a string has already been encountered before, a pointer within that same stack is returned.
+The upper rectangle shows ultimately how strings are stored. The interner, using the allocation routines provided, reserves a linear chunk of memory and uses it like a stack. If it encounters a new string, it pushes it on top. If a string has already been encountered before, a pointer within that same stack is returned.
 (In the picture, the stack top is to the right.)
 
+## Motivation for Custom Hashing Scheme
+
+### Small Problem:
+Usually, one uses a hashtable to associate data with a given key. But in our case, we have no such data to associate. 
+The table really only needs to store keys. If a string is in the table then it is there: that's all the information we need.
+The problem with a generic hashtable implementation is that it will still expect values regardless of what we want: the easiest would be passing `true` to all entries.
+Here again, we would be storing unnecessary data. There is no need for me to check the value of the entry to know that it's there and yet it occupies one extra byte.
+For small files, this is fine. For bigger files, the calculus looks different.
+Assume we are processing a 1 GiB file of which 8% are unique strings. That's 82 MiB just for strings. If the length of each string is 12 bytes on average, we'd have 7 million strings in memory and 7 MiB extra for useless boolean values.
+This extra data isn't only burdensome to the user: it doesn't take much to miss a cache boundary, cause a page fault, or induce a syscall to allocate more memory.
+
+### The Really Big Problem:
+We already store our keys in memory we own for various uses, but a generic table will still allocate its own memory for all keys it stores. Suddenly, we have a doubling of the space required to store any number of strings. Going with the previous example, the table would be holding an extra 82 MiB. Professionals call this behaviour bad.
+
+If we get clever and deallocate our own strings in favour of references to allocations owned by the table, we'd have to enforce the requirement that pointers to strings inside the table remain stable throughout the lifetime of the parser. This is somwehere between hard and arcane with a generic table made by someone else.
+
+
+Therefore it is much easier to implement a minimal hashtable that only really fulfills these necessaties and doesn't store extra data. That's what "interner.h" is there for.
