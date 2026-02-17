@@ -76,12 +76,15 @@ The upper rectangle shows ultimately how strings are stored. The interner, using
 ## Motivation for Custom Hashing Scheme
 
 ### Small Problem:
-Usually, one uses a hashtable to associate data with a given key. But in our case, we have no such data to associate. 
-The table really only needs to store keys. If a string is in the table then it is there: that's all the information we need.
+Usually, one uses a hashtable to associate data with a given key. But in our case, we have no such data to associate.  The table really only needs to store keys. If a string is in the table then it is there: that's all the information we need.
+
 The problem with a generic hashtable implementation is that it will still expect values regardless of what we want: the easiest would be passing `true` to all entries.
+
 Here again, we would be storing unnecessary data. There is no need for me to check the value of the entry to know that it's there and yet it occupies one extra byte.
+
 For small files, this is fine. For bigger files, the calculus looks different.
 Assume we are processing a 1 GiB file of which 8% are unique strings. That's 82 MiB just for strings. If the length of each string is 12 bytes on average, we'd have 7 million strings in memory and 7 MiB extra for useless boolean values.
+
 This extra data isn't only burdensome to the user: it doesn't take much to miss a cache boundary, cause a page fault, or induce a syscall to allocate more memory.
 
 ### The Really Big Problem:
