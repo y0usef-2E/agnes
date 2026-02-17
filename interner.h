@@ -237,7 +237,31 @@ byte_slice intern_string(interner_t *interner, byte_slice source) {
         assert(new_buf != NULL);
 
         if (interner->pool_at + 1 >= interner->max_pools) {
-            // realloc pool array
+            u8 *new_pools;
+            u8 *new_pool_sizes;
+
+            if (!interner->allocator.alloc(
+                    interner->max_pools * 2 * sizeof(u8 *), &new_pools)) {
+                panic("out of space while allocating array for pool lookup");
+            }
+
+            if (!interner->allocator.alloc(interner->max_pools * 2 *
+                                               sizeof(size_t),
+                                           &new_pool_sizes)) {
+                panic("out of space while allocating array for pool lookup");
+            }
+
+            memcpy(new_pools, interner->pools,
+                   interner->max_pools * sizeof(u8 *));
+
+            memcpy(new_pool_sizes, interner->pool_sizes,
+                   interner->max_pools * sizeof(size_t));
+
+            interner->allocator.free(interner->pools);
+            interner->allocator.free(interner->pool_sizes);
+
+            interner->pools = new_pools;
+            interner->pool_sizes = new_pool_sizes;
         }
 
         interner->pool_at += 1;

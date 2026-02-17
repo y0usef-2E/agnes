@@ -34,7 +34,7 @@ if os.name == "nt":
         subprocess.run(["xcopy", "/f", "/y", ("..\\" + header_file), "."], shell=True)
 
     os.chdir("build")
-    subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file_abs, "-o", exec], shell=True)
+    subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file_abs, "-g", "-o", exec], shell=True)
     
     if not args.build_only:    
         res = subprocess.run([exec])
