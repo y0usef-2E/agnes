@@ -53,9 +53,9 @@ typedef struct string_interner {
 
 #if defined(AG_INTERNER_IMPLEMENT)
 
-#define POOL_ARRAY_SIZE 10u
+#define POOL_ARRAY_SIZE 200u
 
-#define HASH_SET_ENTRIES 8192
+#define HASH_SET_ENTRIES 10
 
 size_t H1(size_t hash) { return hash >> 7; }
 ctrl_byte_t H2(size_t hash) { return hash & 0x7F; }
@@ -109,6 +109,10 @@ static bool bytes_strict_eq(byte_slice left, byte_slice right) {
 }
 
 static void rebuild_table(interner_t *interner) {
+    static int rebuild_table = 0;
+    rebuild_table++;
+    dbg("rebuild table %d", rebuild_table);
+
     size_t old_cap = interner->hashset_cap;
     set_entry_t *old_hashset = interner->hashset;
     u8 *old_ctrl_bytes = interner->ctrl_bytes;
@@ -154,6 +158,7 @@ static void rebuild_table(interner_t *interner) {
     interner->hashset_occ = interner->hashset_occ;
 
     interner->allocator.free(old_ctrl_bytes);
+    interner->allocator.free(old_hashset);
 }
 
 byte_slice find_or_insert(interner_t *interner, byte_slice allocated,
@@ -196,6 +201,7 @@ byte_slice find_or_insert(interner_t *interner, byte_slice allocated,
 }
 
 byte_slice intern_string(interner_t *interner, byte_slice source) {
+
     if (interner->next_string == UINT64_MAX) {
         panic("global string interner uninitialised");
     }
@@ -332,15 +338,15 @@ bool init_global_interner(interner_t *interner, allocator_t allocator,
 
     interner->hashset_cap = HASH_SET_ENTRIES;
 
-    size_t buffer_size = HASH_SET_ENTRIES * (sizeof(set_entry_t) + sizeof(u8));
+    if (!allocator.alloc(HASH_SET_ENTRIES * sizeof(u8), &ctrl_bytes)) {
+        return false;
+    }
 
-    if (!allocator.alloc(buffer_size, &ctrl_bytes)) { // same allocation
+    if (!allocator.alloc(HASH_SET_ENTRIES * sizeof(set_entry_t), &string_set)) {
         return false;
     }
 
     memset(ctrl_bytes, kEmpty, interner->hashset_cap * sizeof(u8));
-
-    string_set = ctrl_bytes + interner->hashset_cap * sizeof(u8);
 
     interner->hashset = string_set;
     interner->ctrl_bytes = ctrl_bytes;

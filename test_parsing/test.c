@@ -4,6 +4,14 @@
 
 // example wrapper functions
 bool stupid_alloc(size_t size, u8 **out) {
+    static size_t bytes = 0;
+    static int times = 0;
+
+    bytes += size;
+    times++;
+
+    dbg("total: %zu, #calls: %d", bytes, times);
+
     u8 *ptr = (u8 *)malloc(size);
     if (ptr == NULL) {
         return false;
@@ -25,21 +33,21 @@ int main(int argc, char const *argv[]) {
     size_t file_size = atoi(argv[2]);
 
     size_t max_file_size = MiB(1200);
-    
 
     if (file_size > max_file_size) {
         panic("input file too big");
     }
 
-    size_t max_tokens = file_size;
-    size_t token_mem_size = max_tokens * sizeof(token_t);
+    size_t token_mem_size = file_size * 4;
+    dbg("tokens(bytes): %zu", token_mem_size);
+    size_t max_tokens = token_mem_size / sizeof(token_t);
 
-    size_t pool_size = file_size +  token_mem_size + max_tokens * sizeof(size_t) ; 
-
+    size_t pool_size = file_size + token_mem_size + max_tokens * sizeof(size_t);
 
     u8 *reserved_memory_pool;
 
     if (!stupid_alloc(pool_size, &reserved_memory_pool)) {
+        dbg("pool_size: %zu", pool_size);
         panic("unable to allocate required memory at start up");
     }
 
@@ -50,10 +58,10 @@ int main(int argc, char const *argv[]) {
     parser.bytes = reserved_memory_pool;
     parser.file_size = file_size;
     parser.filename = filename;
-    parser.max_tokens = max_tokens; 
+    parser.max_tokens = max_tokens;
 
-    parser.tokens = (token_t *)(reserved_memory_pool + file_size );
-    parser.line_info = (size_t *)(reserved_memory_pool + token_mem_size );
+    parser.tokens = (token_t *)(reserved_memory_pool + file_size);
+    parser.line_info = (size_t *)(reserved_memory_pool + token_mem_size);
 
     parser.string_allocator =
         (allocator_t){.alloc = stupid_alloc, .free = stupid_free};
