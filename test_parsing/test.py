@@ -8,6 +8,7 @@ from pathlib import Path
 argparser = argparse.ArgumentParser()
 
 argparser.add_argument('--build-only', action=argparse.BooleanOptionalAction, default=False)
+argparser.add_argument("--build", action=argparse.BooleanOptionalAction, default=True)
 argparser.add_argument('--cleanup', action=argparse.BooleanOptionalAction, default=False)
 argparser.add_argument('--top', type=str, default=None)
 argparser.add_argument("--restrict", type=str, default=None)
@@ -99,9 +100,10 @@ if os.name == "nt":
     for header_file in headers:
         subprocess.run(["xcopy", "/f", "/y", ("..\\" + header_file), "."], shell=True)
 
-    os.chdir("build")
-    subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file, "-g", "-o", exec], shell=True)
-    os.chdir("..")
+    if args.build:
+        os.chdir("build")
+        subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", "-O2", source_file, "-g", "-o", exec], shell=True)
+        os.chdir("..")
 
     if not args.build_only:    
         run_tests()
