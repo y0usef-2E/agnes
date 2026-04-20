@@ -24,12 +24,18 @@ int main(int argc, char const *argv[]) {
     char const *filename = argv[1];
     size_t file_size = atoi(argv[2]);
 
-    size_t pool_size = MiB(1000);
-    size_t max_file_size = MiB(400);
+    size_t max_file_size = MiB(1200);
+    
 
     if (file_size > max_file_size) {
         panic("input file too big");
     }
+
+    size_t max_tokens = file_size;
+    size_t token_mem_size = max_tokens * sizeof(token_t);
+
+    size_t pool_size = file_size +  token_mem_size + max_tokens * sizeof(size_t) ; 
+
 
     u8 *reserved_memory_pool;
 
@@ -44,10 +50,10 @@ int main(int argc, char const *argv[]) {
     parser.bytes = reserved_memory_pool;
     parser.file_size = file_size;
     parser.filename = filename;
-    parser.max_tokens = max_file_size / sizeof(token_t);
+    parser.max_tokens = max_tokens; 
 
-    parser.tokens = (token_t *)(reserved_memory_pool + max_file_size);
-    parser.line_info = (size_t *)(reserved_memory_pool + 2 * max_file_size);
+    parser.tokens = (token_t *)(reserved_memory_pool + file_size );
+    parser.line_info = (size_t *)(reserved_memory_pool + token_mem_size );
 
     parser.string_allocator =
         (allocator_t){.alloc = stupid_alloc, .free = stupid_free};
