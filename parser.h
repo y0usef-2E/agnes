@@ -23,6 +23,7 @@ typedef enum token_type {
     T_STRING_LIT = 2,
     T_UNKNOWN = 3,
     T_UNTERMINATED_STRING_LIT = 4,
+    T_UNTERMINATED_ESC_SEQ = 5,
     T_EOF = 0xFFFFFFFF,
 } token_type_t;
 
@@ -219,6 +220,14 @@ static u8 consume(lexer_t *lexer) {
     return lexer->bytes[pos];
 }
 
+static u8 peek(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return '\0';
+    }
+    return lexer->bytes[pos];
+}
+
 static bool push_token(lexer_t *lexer, token_t t) {
     size_t at = lexer->next_token;
     if (at + 1 <= lexer->max_tokens) {
@@ -261,6 +270,45 @@ static bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
         lexer->position += 1;
         return true;
     }
+    return false;
+}
+
+#define LEN_ESCAPE_CHARS 7
+static u8 s_escape_chars[LEN_ESCAPE_CHARS] = {'\\', '"', 'b', 'f',
+                                              'n',  'r', 't'};
+
+static bool match_consume_esc_char(lexer_t *lexer) {
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return false;
+    }
+
+    u8 c = lexer->bytes[pos];
+
+    for (int k = 0; k < LEN_ESCAPE_CHARS; ++k) {
+        if (s_escape_chars[k] == c) {
+            lexer->position += 1;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static bool match_consume_hex_dig(lexer_t *lexer) {
+
+    size_t pos = lexer->position;
+    if (pos >= lexer->len) {
+        return false;
+    }
+
+    u8 c = lexer->bytes[pos];
+
+    if (c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+        lexer->position += 1;
+        return true;
+    }
+
     return false;
 }
 
@@ -409,24 +457,50 @@ static agnes_result_t tokenize(lexer_t *lexer) {
         } break;
 
         case '"': {
+        resume_string:
             while (match_consume_any_strchar(lexer)) {
             };
             u8 last = consume(lexer);
 
-            size_t start = lexer->begin_i + 1;
-            size_t len = lexer->position - start - 1;
-            byte_slice slice = INTERN(SLICE(lexer->bytes + start, len));
-
             switch (last) {
             case '"':
+                size_t start = lexer->begin_i + 1;
+                size_t len = lexer->position - start - 1;
+
+                byte_slice slice = INTERN(SLICE(lexer->bytes + start, len));
                 token_t t = (token_t){T_STRING_LIT, .byte_sequence = slice};
+
                 if (!push_token(lexer, t)) {
                     return LEXER_OUT_OF_SPACE;
                 }
                 break;
             case '\\':
-                todo("escape sequences, et cetera.");
-                break;
+                if (match_consume_esc_char(lexer)) {
+                    goto resume_string;
+                }
+
+                if (peek(lexer) == 'u') {
+                    consume(lexer);
+                    if (!match_consume_hex_dig(lexer)) {
+                        goto escape_error;
+                    }
+
+                    if (!match_consume_hex_dig(lexer)) {
+                        goto escape_error;
+                    }
+
+                    if (!match_consume_hex_dig(lexer)) {
+                        goto escape_error;
+                    }
+                    if (!match_consume_hex_dig(lexer)) {
+                        goto escape_error;
+                    }
+
+                    goto resume_string;
+                }
+
+            escape_error:
+                return token_error(lexer, T_UNTERMINATED_ESC_SEQ);
             case '\0':
                 return token_error(lexer, T_UNTERMINATED_STRING_LIT);
             default:

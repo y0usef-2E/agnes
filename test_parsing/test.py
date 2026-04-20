@@ -53,7 +53,7 @@ def run_tests():
             if args.restrict is not None: 
                 pref = "y_" + args.restrict 
                 if file.name.startswith(pref):
-                    print(file)
+                    print(file, file.stat().st_size)
                     paths.append(file.absolute())
                     sizes.append(file.stat().st_size)
                     expect.append(True)    
@@ -68,7 +68,7 @@ def run_tests():
             if args.restrict is not None:
                 pref = "n_" + args.restrict 
                 if file.name.startswith(pref):
-                    print(file)
+                    print(file, file.stat().st_size)
                     paths.append(file.absolute())
                     sizes.append(file.stat().st_size)
                     expect.append(False)    
@@ -102,7 +102,7 @@ if os.name == "nt":
 
     if args.build:
         os.chdir("build")
-        subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", "-O2", source_file, "-g", "-o", exec], shell=True)
+        subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file, "-g", "-o", exec], shell=True)
         os.chdir("..")
 
     if not args.build_only:    
