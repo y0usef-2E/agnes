@@ -249,7 +249,7 @@ static bool match_consume_any_strchar(lexer_t *lexer) {
         return false;
     }
     u8 c = lexer->bytes[pos];
-    if (c == '\\' || c == '"') {
+    if (c == '\\' || c == '"' || c <= 0x1F) {
         return false;
     }
     lexer->position += 1;
@@ -273,9 +273,9 @@ static bool match_consume_ident_char(lexer_t *lexer, bool with_underscore) {
     return false;
 }
 
-#define LEN_ESCAPE_CHARS 7
-static u8 s_escape_chars[LEN_ESCAPE_CHARS] = {'\\', '"', 'b', 'f',
-                                              'n',  'r', 't'};
+#define LEN_ESCAPE_CHARS 8
+static u8 s_escape_chars[LEN_ESCAPE_CHARS] = {'\\', '/', '"', 'b',
+                                              'f',  'n', 'r', 't'};
 
 static bool match_consume_esc_char(lexer_t *lexer) {
     size_t pos = lexer->position;

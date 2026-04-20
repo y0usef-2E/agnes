@@ -4,6 +4,7 @@ import os
 import subprocess
 import argparse
 from pathlib import Path
+import time
 
 argparser = argparse.ArgumentParser()
 
@@ -12,6 +13,8 @@ argparser.add_argument("--build", action=argparse.BooleanOptionalAction, default
 argparser.add_argument('--cleanup', action=argparse.BooleanOptionalAction, default=False)
 argparser.add_argument('--top', type=str, default=None)
 argparser.add_argument("--restrict", type=str, default=None)
+argparser.add_argument("--opt", action=argparse.BooleanOptionalAction, default=False)
+
 
 args = argparser.parse_args()
 
@@ -38,14 +41,21 @@ expect: list[bool] = []
 
 def run_tests(): 
     if args.top:
+        begin = time.perf_counter_ns() 
+
         input = Path(args.top).absolute()
         assert input.exists()
         assert input.is_file()
         input_size = input.stat().st_size
         os.chdir("build")
         proc = subprocess.run([exec, input, str(input_size)])
-        print("Got back: ", "ACCEPTED" if not proc.returncode else "REJECTED" )
+        elapsed = time.perf_counter_ns() - begin;
+        elapsed_ms = elapsed / 1_000_000;
+        elapsed_sec = elapsed_ms / 1000;
+        print(f"elapsed: {elapsed_ms}sms = {elapsed_sec}s")
 
+        print("Got back: ", "ACCEPTED" if not proc.returncode else "REJECTED" )
+        
     else:
         passing = Path("yes")
         for file in passing.iterdir():
@@ -77,9 +87,6 @@ def run_tests():
                 sizes.append(file.stat().st_size)
                 expect.append(False)
 
-
-        import time
-
         os.chdir("build")
         print(f"running {len(paths)} tests: MODE=", args.restrict if args.restrict else "ALL")
         with open(f"0_log_{time.time()}.csv", "w") as output_log:
@@ -102,7 +109,11 @@ if os.name == "nt":
 
     if args.build:
         os.chdir("build")
-        subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file, "-g", "-o", exec], shell=True)
+        if args.opt:
+            subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", "-fstrict-aliasing", "-O2", source_file, "-o", exec], shell=True)
+        else:
+            subprocess.run([VISUAL_STUDIO_AT, "x64", "&&", "clang", source_file, "-g", "-o", exec], shell=True)    
+        
         os.chdir("..")
 
     if not args.build_only:    
