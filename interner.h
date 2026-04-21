@@ -53,9 +53,9 @@ typedef struct string_interner {
 
 #if defined(AG_INTERNER_IMPLEMENT)
 
-#define POOL_ARRAY_SIZE 200u
+#define POOL_ARRAY_SIZE 20u
 
-#define HASH_SET_ENTRIES 10
+#define HASH_SET_ENTRIES (MiB(10) / sizeof(set_entry_t))
 
 size_t H1(size_t hash) { return hash >> 7; }
 ctrl_byte_t H2(size_t hash) { return hash & 0x7F; }
